@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Regreso a almac&eacute;n - Arbolani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="llegada">
+    <main class="layout narrow">
+      <div class="panel step-card">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Paso 3</div>
+            <h2>Regreso a almac&eacute;n</h2>
+            <p class="muted">Cierra la ruta tras la &uacute;ltima descarga.</p>
+          </div>
+          <div id="session-worker" class="chip muted"></div>
+        </div>
+
+        <div class="row spaced">
+          <button class="mini-btn" type="button" id="qr-warehouse-btn">Escanear QR almac&eacute;n</button>
+          <button class="btn secondary" type="button" onclick="window.location.href='/'">Inicio</button>
+        </div>
+
+        <div id="arrival-content" class="stack gap"></div>
+      </div>
+
+      <div class="row spaced" style="margin-top:12px;">
+        <a class="mini-btn" href="/">Volver a inicio</a>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panel admin - Arbolani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="admin">
+    <main class="layout">
+      <div class="panel" id="admin-login-panel">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Panel administrador</div>
+            <h2>Iniciar sesi&oacute;n</h2>
+            <p class="muted">Credenciales de prueba: admin / 123</p>
+          </div>
+        </div>
+        <form id="admin-login-form" class="form-grid">
+          <label>
+            Usuario
+            <input name="username" placeholder="admin" required />
+          </label>
+          <label>
+            Contrase&ntilde;a
+            <input type="password" name="password" placeholder="123" required />
+          </label>
+          <button class="btn" type="submit">Entrar</button>
+        </form>
+      </div>
+
+      <div class="panel hidden admin-shell" id="admin-content">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Vista admin</div>
+            <h2>Alertas, centros y movimientos</h2>
+          </div>
+          <div class="chip" id="admin-session-label"></div>
+        </div>
+
+        <div id="admin-stats" class="stat-row"></div>
+
+        <div class="panel sub-panel flush">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Centros ordenados</div>
+            </div>
+          </div>
+          <div id="admin-center-grid" class="micro-grid"></div>
+        </div>
+
+        <div class="panel sub-panel flush">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Alertas</div>
+            </div>
+          </div>
+          <div id="admin-alerts" class="alert-wall compact"></div>
+        </div>
+
+        <div class="panel sub-panel flush">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Rutas y movimientos</div>
+            </div>
+          </div>
+          <div id="admin-route-table" class="excel-board"></div>
+        </div>
+
+        <div class="row spaced" style="margin-top:12px;">
+          <a class="mini-btn" href="/">Volver a inicio</a>
+        </div>
+      </div>
+  </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Llegada a destino - Arbolani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="destino">
+    <main class="layout">
+      <div class="panel step-card">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Paso 2</div>
+            <h2>Llegada a destino</h2>
+            <p class="muted">Escanea o marca llegada y descarga.</p>
+          </div>
+          <div id="session-worker" class="chip muted"></div>
+        </div>
+
+        <div class="step-grid">
+          <div class="mini-panel">
+            <div class="row spaced">
+              <div class="caps">QR centro</div>
+              <select id="qr-center-select" class="mini-select">
+                <option value="">Selecciona QR</option>
+              </select>
+            </div>
+            <div id="route-container" class="stack gap"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row spaced" style="margin-top:12px;">
+        <a class="mini-btn" href="/">Volver a inicio</a>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

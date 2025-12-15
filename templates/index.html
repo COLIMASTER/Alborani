@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Alborani | Centros disponibles</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="home">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/static/images.jpg" alt="Alborani logo" class="brand-logo" />
+        <div>
+          <div class="brand-title">Alborani Agr&iacute;cola</div>
+          <div class="brand-sub">Rutas y dep&oacute;sitos</div>
+        </div>
+      </div>
+      <div class="top-right">
+        <button class="mini-btn hidden" id="session-toggle" type="button">Sesion</button>
+        <nav class="top-links">
+          <a href="/">Inicio</a>
+          <a href="/admin" class="admin-only-button">Panel admin</a>
+        </nav>
+        <img src="/static/logo.png" alt="Savian logo" class="extra-logo" />
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="gate" id="login-gate">
+        <div class="panel gate-card">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Acceso</div>
+              <h2>Inicia sesi&oacute;n</h2>
+            </div>
+          </div>
+          <form id="login-form" class="stack">
+            <label>Rol
+              <select name="role">
+                <option value="admin">Administrador</option>
+                <option value="worker">Operario</option>
+              </select>
+            </label>
+            <label>Usuario<input name="username" placeholder="admin o prueba1" required /></label>
+            <label>Contrase&ntilde;a<input type="password" name="password" placeholder="123" required /></label>
+            <button class="btn" type="submit">Entrar</button>
+          </form>
+          <p class="muted small">Admin: admin/123 · Operarios: prueba1/2/3 con 123</p>
+        </div>
+      </section>
+
+      <section class="hero compact admin-only">
+        <div class="hero-copy">
+          <span class="pill glass">Panel de trabajo</span>
+          <h1>Operaci&oacute;n diaria.</h1>
+          <p class="muted">Accesos r&aacute;pidos y rutas activas.</p>
+          <div class="toolbar">
+            <button class="btn" id="btn-start-route">Iniciar ruta</button>
+            <button class="btn secondary" onclick="window.location.href='/salida'">Registrar salida</button>
+            <button class="btn ghost admin-only-button" onclick="window.location.href='/admin'">Panel administrador</button>
+            <button class="btn ghost" id="btn-drain">Simular dep&oacute;sitos</button>
+          </div>
+          <div class="hero-mini">
+            <div>
+              <div class="caps">Perfiles demo</div>
+              <p class="muted">prueba1 / 123 &middot; prueba2 / 123 &middot; prueba3 / 123</p>
+            </div>
+            <div>
+              <div class="caps">Admin</div>
+              <p class="muted">admin / 123</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel center-wall admin-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Centros</div>
+          </div>
+          <div class="legend">
+            <span><span class="dot crit"></span>Alerta</span>
+            <span><span class="dot warn"></span>Precaucion</span>
+            <span><span class="dot ok"></span>Verde</span>
+          </div>
+        </div>
+        <div id="center-grid" class="micro-grid"></div>
+      </section>
+
+      <section class="panel alert-panel admin-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Alertas globales</div>
+          </div>
+        </div>
+        <div id="alarms-panel" class="alert-wall"></div>
+      </section>
+
+      <section class="split admin-only wide">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Mapa</div>
+            </div>
+          </div>
+          <div id="map-admin" class="map"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Rutas activas</div>
+            </div>
+          </div>
+          <div id="active-routes" class="route-list compact"></div>
+          <div class="timeline-head">Historial</div>
+          <div class="filter-row" id="log-filter-row">
+            <div class="pill-switch" id="filter-range"></div>
+            <div class="pill-switch" id="filter-worker"></div>
+            <div class="pill-switch" id="filter-center"></div>
+          </div>
+          <ul id="delivery-log" class="log slim"></ul>
+        </div>
+      </section>
+
+      <section class="panel admin-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Flujo de operarios</div>
+          </div>
+        </div>
+        <div id="worker-flow" class="excel-board"></div>
+      </section>
+
+      <section class="panel worker-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Tus rutas</div>
+          </div>
+        </div>
+        <div id="worker-active" class="route-list vibrant"></div>
+        <div class="timeline-head">Historial</div>
+        <ul id="worker-history" class="log vivid"></ul>
+      </section>
+
+      <section class="panel worker-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Mapa</div>
+          </div>
+        </div>
+        <div id="map-worker" class="map"></div>
+      </section>
+
+      <section class="panel quick-links worker-only">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Flujo QR</div>
+          </div>
+        </div>
+        <div class="step-tracker" id="step-tracker">
+          <a class="step-pill" data-step-pill="1" href="/salida">Paso 1: salida de almac&eacute;n</a>
+          <a class="step-pill" data-step-pill="2" href="/destino">Paso 2: llegada y descarga</a>
+          <a class="step-pill" data-step-pill="3" href="/llegada">Paso 3: regreso a almac&eacute;n</a>
+          <a class="step-pill" data-step-pill="4" href="/">Paso 4: historial</a>
+        </div>
+      </section>
+
+      <div class="row spaced" style="margin-top:12px;">
+        <a class="mini-btn" href="/">Volver a inicio</a>
+      </div>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

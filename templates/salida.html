@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Salida de almac&eacute;n - Arbolani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="salida">
+    <main class="layout">
+      <div class="panel step-card">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Paso 1</div>
+            <h2>Salida</h2>
+          </div>
+          <div id="session-worker" class="chip muted"></div>
+        </div>
+
+        <form id="plan-route-form" class="step-grid">
+          <div class="mini-panel">
+            <div class="row spaced">
+              <div class="caps">QR cami&oacute;n</div>
+              <select id="qr-truck-select" class="mini-select">
+                <option value="">Selecciona QR</option>
+                <option value="TR-01">TR-01</option>
+                <option value="TR-02">TR-02</option>
+                <option value="TR-03">TR-03</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <label>
+                Camion
+                <select name="truck_id" id="truck-select"></select>
+              </label>
+              <label>
+                Origen
+                <input name="origin" id="origin-input" placeholder="Almacen" />
+              </label>
+              <label>
+                Producto
+                <input name="product_type" id="product-type" placeholder="NPK, correctores, etc." />
+              </label>
+              <label>
+                Litros carga
+                <input type="number" name="load_l" id="load-input" min="0" step="100" value="6000" required />
+              </label>
+            </div>
+          </div>
+
+          <div class="mini-panel">
+            <div class="row spaced">
+              <div class="caps">Destinos</div>
+              <button class="mini-btn" type="button" id="add-destination">Agregar</button>
+            </div>
+            <div id="destinations" class="destination-list"></div>
+            <div class="form-actions">
+              <button class="btn" type="submit">Crear ruta</button>
+              <button class="btn secondary" type="button" onclick="window.location.href='/'">Inicio</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="split">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Camiones</div>
+              <p class="muted">Disponibles, en ruta o retornando.</p>
+            </div>
+          </div>
+          <div id="truck-grid" class="truck-grid"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Resumen de centros</div>
+              <p class="muted">Niveles resumidos antes de salir.</p>
+            </div>
+          </div>
+          <div id="mini-centers" class="mini-centers"></div>
+        </div>
+      </div>
+
+      <div class="row spaced" style="margin-top:12px;">
+        <a class="mini-btn" href="/">Volver a inicio</a>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

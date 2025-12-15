@@ -1,0 +1,3068 @@
+
+
+let mapInstances = {};
+
+let tankMarkerSets = {};
+
+let truckMarkerSets = {};
+
+let lastState = null;
+
+let qrScannerWidget = null;
+
+let selectedCenterId = null;
+
+const logFilters = { range: "24h", worker: "all", center: "all" };
+
+function toggleGate(show) {
+  const gate = document.getElementById("login-gate");
+  const appShell = document.querySelectorAll(".admin-only, .worker-only, .quick-links");
+  if (gate) gate.style.display = show ? "grid" : "none";
+  if (show) {
+    appShell.forEach((el) => (el.style.display = "none"));
+  }
+}
+
+
+const statusColor = {
+
+  ok: "#66e2c1",
+
+  warn: "#ffc857",
+
+  critical: "#ff7b7b",
+
+};
+
+
+
+const severityRank = {
+
+  critical: 2,
+
+  warn: 1,
+
+  ok: 0,
+
+};
+
+
+
+const truckColor = {
+
+  parked: "#9bb3cb",
+
+  outbound: "#5fb3ff",
+
+  delivering: "#ffc857",
+
+  returning: "#66e2c1",
+
+};
+
+
+
+const truckStatusLabel = {
+
+  parked: "En almacen",
+
+  outbound: "En ruta",
+
+  delivering: "En destino",
+
+  returning: "Volviendo",
+
+};
+
+
+
+const routeStatusLabel = {
+
+  en_ruta: "En ruta",
+
+  en_destino: "En destino",
+
+  en_descarga: "En descarga",
+
+  regresando: "Regresando",
+
+  finalizada: "Finalizada",
+
+  planificada: "Planificada",
+
+};
+
+
+
+const truckQRProfiles = {
+
+  "TR-01": { truck_id: "TR-01", product_type: "NPK 15-5-30", load_l: 8000 },
+
+  "TR-02": { truck_id: "TR-02", product_type: "Calcio + nitrato", load_l: 9000 },
+
+  "TR-03": { truck_id: "TR-03", product_type: "NPK 12-12-24", load_l: 8500 },
+
+};
+
+
+
+function flash(text) {
+
+  const toast = document.getElementById("toast");
+
+  if (!toast) return;
+
+  toast.textContent = text;
+
+  toast.style.opacity = 1;
+
+  setTimeout(() => (toast.style.opacity = 0), 2400);
+
+}
+
+
+
+async function postJSON(url, body) {
+
+  const res = await fetch(url, {
+
+    method: "POST",
+
+    headers: { "Content-Type": "application/json" },
+
+    body: JSON.stringify(body),
+
+  });
+
+  return res.json();
+
+}
+
+
+
+async function fetchState() {
+
+  const res = await fetch("/api/state");
+
+  lastState = await res.json();
+
+  saveCachedState(lastState);
+
+  return lastState;
+
+}
+
+
+
+function formatLiters(n) {
+
+  if (n === null || n === undefined) return "-";
+
+  return `${Math.round(n).toLocaleString()} L`;
+
+}
+
+
+
+function formatDatePlus1(ts) {
+
+  if (!ts) return "n/d";
+
+  const d = new Date(ts);
+
+  d.setMinutes(d.getMinutes() + 60);
+
+  return d.toLocaleTimeString();
+
+}
+
+
+
+function minutesBetween(start, end) {
+
+  if (!start || !end) return null;
+
+  return Math.max(0, Math.round((end - start) / 60000));
+
+}
+
+
+
+function compactProduct(product = "") {
+
+  const text = (product || "").toString().toLowerCase();
+
+  if (!text) return "-";
+
+  if (text.includes("calcio") || text.includes("nitrato")) return "C+N";
+
+  if (text.includes("npk")) {
+
+    const match = product.match(/npk[^0-9]*([0-9-]+)/i);
+
+    return match ? `NPK ${match[1]}` : "NPK";
+
+  }
+
+  if (text.includes("fos") || text.includes("phos")) return "P";
+
+  if (text.includes("urea")) return "Urea";
+
+  return product.length > 8 ? product.slice(0, 8) : product;
+
+}
+
+
+
+function worstStatus(tanks = []) {
+
+  return tanks.reduce((worst, t) => {
+
+    const current = severityRank[worst] ?? -1;
+
+    const incoming = severityRank[t.status] ?? 0;
+
+    return incoming > current ? t.status : worst;
+
+  }, "ok");
+
+}
+
+
+
+function centerSeverity(center) {
+
+  const rank = severityRank[worstStatus(center.tanks || [])] ?? 0;
+
+  return rank;
+
+}
+
+
+
+function sortCentersByAlert(centers = []) {
+
+  return [...centers].sort((a, b) => {
+
+    const diff = centerSeverity(b) - centerSeverity(a);
+
+    if (diff !== 0) return diff;
+
+    const countA = (a.alerts || []).length;
+
+    const countB = (b.alerts || []).length;
+
+    if (countB !== countA) return countB - countA;
+
+    return a.name.localeCompare(b.name);
+
+  });
+
+}
+
+
+
+function averageSensor(tanks, path, digits = 2) {
+
+  const vals = (tanks || [])
+
+    .map((t) => path.reduce((acc, k) => acc?.[k], t.sensors))
+
+    .filter((v) => v !== undefined);
+
+  if (!vals.length) return "-";
+
+  const n = vals.reduce((a, b) => a + b, 0) / vals.length;
+
+  return n.toFixed(digits);
+
+}
+
+
+
+function getSession(key) {
+
+  try {
+
+    const raw = localStorage.getItem(key);
+
+    return raw ? JSON.parse(raw) : null;
+
+  } catch (_e) {
+
+    return null;
+
+  }
+
+}
+
+
+
+function saveSession(key, value) {
+
+  localStorage.setItem(key, JSON.stringify(value));
+
+}
+
+
+
+function getCachedState() {
+
+  try {
+
+    const raw = localStorage.getItem("lastStateCache");
+
+    return raw ? JSON.parse(raw) : null;
+
+  } catch (_e) {
+
+    return null;
+
+  }
+
+}
+
+
+
+function saveCachedState(state) {
+
+  try {
+
+    localStorage.setItem("lastStateCache", JSON.stringify(state));
+
+  } catch (_e) {
+
+    /* ignore */
+
+  }
+
+}
+
+
+
+function clearSession(key) {
+
+  try {
+
+    localStorage.removeItem(key);
+
+  } catch (_e) {
+
+    /* ignore */
+
+  }
+
+}
+
+
+
+function refreshSessionBadges() {
+
+  ensureSessionModal();
+
+  const worker = ensureWorkerSession();
+
+  const admin = getSession("adminSession");
+
+  const active = worker || admin;
+
+  const label = worker ? `Operario: ${worker.user}` : admin ? `Admin: ${admin.user}` : "Sesion no iniciada";
+
+  const actionLabel = active ? "Cerrar sesion" : "Iniciar sesion";
+
+
+
+  document.querySelectorAll("#session-worker").forEach((el) => {
+    el.classList.add("session-chip");
+    el.innerHTML = `<span>${label}</span><button class="mini-btn" type="button" data-session-action="${active ? "logout" : "login"}">${actionLabel}</button>`;
+    el.querySelector("button")?.addEventListener("click", () => {
+      const mode = active ? "logout" : "login";
+      if (mode === "logout") {
+        clearSession("workerSession");
+        clearSession("adminSession");
+        clearSession("activeRouteId");
+        flash("Sesion cerrada");
+        toggleGate(true);
+        refreshSessionBadges();
+        window.location.href = "/";
+        return;
+      }
+      window.openSessionModal?.("worker");
+    });
+  });
+
+
+
+  const topBtn = document.getElementById("session-toggle");
+
+  if (topBtn) {
+
+    topBtn.textContent = actionLabel;
+    topBtn.style.display = active ? "inline-flex" : "none";
+
+    topBtn.setAttribute("data-session-action", active ? "logout" : "login");
+    topBtn.onclick = () => {
+      const mode = topBtn.getAttribute("data-session-action");
+      if (mode === "logout") {
+        clearSession("workerSession");
+        clearSession("adminSession");
+        clearSession("activeRouteId");
+        flash("Sesion cerrada");
+        refreshSessionBadges();
+        toggleGate(true);
+        if (typeof loadHome === "function") loadHome();
+        window.location.href = "/";
+        return;
+      }
+      window.openSessionModal?.("worker");
+    };
+
+  }
+
+
+
+  document.querySelectorAll("[data-session-action]").forEach((btn) => {
+
+    btn.onclick = () => {
+
+      const workerSession = ensureWorkerSession();
+
+      const adminSession = getSession("adminSession");
+
+      const mode = btn.getAttribute("data-session-action");
+
+      if (mode === "logout" && (workerSession || adminSession)) {
+
+        clearSession("workerSession");
+
+        clearSession("adminSession");
+
+        clearSession("activeRouteId");
+
+        flash("Sesion cerrada");
+
+        refreshSessionBadges();
+
+        const hint = document.getElementById("session-hint");
+
+        if (hint) hint.textContent = "Sesion no iniciada";
+
+        if (typeof loadHome === "function") loadHome();
+
+        return;
+
+      }
+
+      window.openSessionModal?.("worker");
+
+    };
+
+  });
+
+}
+
+
+
+function ensureSessionModal() {
+
+  if (document.getElementById("session-modal")) return;
+
+  const wrapper = document.createElement("div");
+
+  wrapper.innerHTML = `
+
+    <div id="session-modal" class="modal hidden">
+
+      <div class="modal-card">
+
+        <div class="row spaced">
+
+          <div>
+
+            <div class="caps">Sesion</div>
+
+            <h3>Iniciar o cerrar sesion</h3>
+
+          </div>
+
+          <button class="mini-btn" id="close-session-modal" type="button">Cerrar</button>
+
+        </div>
+
+        <form id="session-modal-form" class="stack">
+
+          <label>Rol
+
+            <select name="role">
+
+              <option value="worker">Operario</option>
+
+              <option value="admin">Administrador</option>
+
+            </select>
+
+          </label>
+
+          <label>Usuario<input name="username" placeholder="prueba1 o admin" required /></label>
+
+          <label>Contrase&ntilde;a<input type="password" name="password" placeholder="123" required /></label>
+
+          <div class="row">
+
+            <button class="btn" type="submit">Entrar</button>
+
+            <button class="btn ghost" type="button" id="session-logout-btn">Cerrar sesion actual</button>
+
+          </div>
+
+          <p class="muted small" id="session-hint">Sesion no iniciada</p>
+
+        </form>
+
+      </div>
+
+    </div>
+
+  `;
+
+  const modalEl = wrapper.firstElementChild;
+
+  if (modalEl) document.body.appendChild(modalEl);
+
+  const modal = document.getElementById("session-modal");
+
+  const form = document.getElementById("session-modal-form");
+
+  const hint = document.getElementById("session-hint");
+
+
+
+  const updateHint = () => {
+
+    const worker = ensureWorkerSession();
+
+    const admin = getSession("adminSession");
+
+    if (worker) {
+
+      hint.textContent = `Operario activo: ${worker.user}`;
+
+    } else if (admin) {
+
+      hint.textContent = `Admin activo: ${admin.user}`;
+
+    } else {
+
+      hint.textContent = "Sesion no iniciada";
+
+    }
+
+  };
+
+
+
+  const openSessionModal = (role = "worker") => {
+
+    ensureSessionModal();
+
+    form.role.value = role;
+
+    updateHint();
+
+    modal?.classList.remove("hidden");
+
+    modal?.classList.add("active");
+
+  };
+
+
+
+  const closeSessionModal = () => {
+
+    modal?.classList.add("hidden");
+
+    modal?.classList.remove("active");
+
+  };
+
+
+
+  form?.addEventListener("submit", async (e) => {
+
+    e.preventDefault();
+
+    const body = {
+
+      username: form.username.value,
+
+      password: form.password.value,
+
+      role: form.role.value,
+
+    };
+
+    const res = await postJSON("/api/login", body);
+
+    if (!res.ok) {
+
+      flash(res.error || "Credenciales invalidas");
+
+      return;
+
+    }
+
+    if (res.role === "admin") {
+
+      saveSession("adminSession", { user: body.username });
+
+    } else {
+
+      saveSession("workerSession", { user: body.username });
+
+    }
+
+    flash(`Sesion ${res.role === "admin" ? "admin" : "operario"} iniciada`);
+
+    refreshSessionBadges();
+
+    closeSessionModal();
+
+  });
+
+
+
+  document.getElementById("session-logout-btn")?.addEventListener("click", () => {
+
+    clearSession("workerSession");
+
+    clearSession("adminSession");
+
+    clearSession("activeRouteId");
+
+    flash("Sesion cerrada");
+
+    refreshSessionBadges();
+
+    toggleGate(true);
+
+    updateHint();
+
+    closeSessionModal();
+    window.location.href = "/";
+
+  });
+
+
+
+  document.getElementById("close-session-modal")?.addEventListener("click", closeSessionModal);
+
+
+
+  window.openSessionModal = openSessionModal;
+
+  window.closeSessionModal = closeSessionModal;
+
+  updateHint();
+
+}
+
+
+
+function parseAlbaranPayload(text) {
+
+  if (!text) return null;
+
+  try {
+
+    const obj = JSON.parse(text);
+
+    return {
+
+      product_type: obj.product_type || obj.product || obj.prod || "",
+
+      load_l: obj.load_l || obj.liters || obj.litros || obj.cantidad || obj.qty || 0,
+
+      note: obj.note || obj.nota || "",
+
+    };
+
+  } catch (_e) {
+
+    const params = new URLSearchParams(text);
+
+    if ([...params.keys()].length) {
+
+      return {
+
+        product_type: params.get("product_type") || params.get("product") || "",
+
+        load_l: Number(params.get("load_l") || params.get("liters") || params.get("litros") || 0),
+
+        note: params.get("note") || "",
+
+    };
+
+  }
+
+  document.querySelectorAll(".admin-only-button").forEach((el) => {
+    el.style.display = admin ? "inline-flex" : "none";
+  });
+
+}
+
+  return null;
+
+}
+
+
+
+function tankSvgSimple(tank) {
+
+  const pct = Math.max(0, Math.min(tank.percentage || 0, 100));
+
+  const fillH = 80 * (pct / 100);
+
+  const y = 90 - fillH;
+
+  const color = statusColor[tank.status] || statusColor.ok;
+
+  return `
+
+    <svg viewBox="0 0 90 110" class="tank-svg" aria-label="${pct}%">
+
+      <defs>
+
+        <linearGradient id="glass-${tank.id}" x1="0" y1="0" x2="0" y2="1">
+
+          <stop offset="0%" stop-color="rgba(255,255,255,0.25)"/>
+
+          <stop offset="100%" stop-color="rgba(255,255,255,0.08)"/>
+
+        </linearGradient>
+
+      </defs>
+
+      <rect x="18" y="12" width="54" height="90" rx="14" fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.2)" stroke-width="2"/>
+
+      <rect x="22" y="${y}" width="46" height="${fillH}" rx="12" fill="${color}" opacity="0.85"/>
+
+      <rect x="18" y="12" width="54" height="90" rx="14" fill="url(#glass-${tank.id})"/>
+
+      <text x="45" y="60" text-anchor="middle" fill="#f7fbff" font-size="14" font-weight="700">${pct}%</text>
+
+    </svg>
+
+  `;
+
+}
+
+function renderCenters(centers, targetId = "center-grid", options = {}) {
+  const grid = document.getElementById(targetId);
+  if (!grid) return;
+  grid.innerHTML = "";
+  const ordered = sortCentersByAlert(centers || []);
+  if (!ordered.length) {
+    grid.innerHTML = `<div class="muted">Sin centros.</div>`;
+    return;
+  }
+  const canFocus = !options.skipFocus && document.getElementById("center-detail");
+  ordered.forEach((c) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    const worst = worstStatus(c.tanks || []);
+    card.className = `micro-card severity-${worst}`;
+    const mini = (c.tanks || []).slice(0, 3);
+    card.innerHTML = `
+      <div class="micro-head">
+        <span class="name">${c.name}</span>
+        <span class="pill tiny ${worst}">${worst === "critical" ? "ALTA" : worst === "warn" ? "PRE" : "OK"}</span>
+      </div>
+      <div class="nano-row">
+        ${mini
+          .map((t, idx) => {
+            const color = statusColor[t.status] || statusColor.ok;
+            const pct = Math.max(0, Math.min(t.percentage || 0, 100));
+            const fillPct = Math.max(6, pct);
+            return `
+              <div class="nano-tank">
+                <div class="nano-jar">
+                  <span class="nano-index">${idx + 1}</span>
+                  <div class="nano-fill" style="height:${fillPct}%;background:${color};"></div>
+                </div>
+                <div class="nano-meta">${pct}% - ${compactProduct(t.product)}</div>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+    `;
+    if (canFocus) {
+      card.onclick = () => renderCenterDetail(c);
+    } else {
+      card.onclick = () => {
+        window.location.href = `/centro/${c.id}`;
+      };
+    }
+    grid.appendChild(card);
+  });
+  const preferred = ordered.find((c) => c.id === selectedCenterId) || ordered[0];
+  if (canFocus && preferred) renderCenterDetail(preferred);
+}
+function renderCenterDetail(center, opts = {}) {
+  const targetId = opts.targetId || "center-detail";
+  const titleId = opts.titleId || "center-detail-title";
+  const statusId = opts.statusId || "center-detail-status";
+  const panel = document.getElementById(targetId);
+  const title = document.getElementById(titleId);
+  const badge = document.getElementById(statusId);
+  if (!panel || !center) return;
+  selectedCenterId = center.id;
+  if (title) title.textContent = center.name;
+  const worst = worstStatus(center.tanks || []);
+  if (badge) {
+    const label = worst === "critical" ? "Alerta" : worst === "warn" ? "Precaucion" : "Ok";
+    badge.textContent = label;
+    badge.className = `chip soft severity-${worst}`;
+  }
+  panel.innerHTML = "";
+  center.tanks?.forEach((t, idx) => {
+    const pct = Math.max(0, Math.min(t.percentage || 0, 100));
+    const fillPct = Math.max(6, pct);
+    const color = statusColor[t.status] || statusColor.ok;
+    const card = document.createElement("div");
+    card.className = "focus-tank";
+    card.innerHTML = `
+      <div class="focus-jar">
+        <span class="focus-index">${idx + 1}</span>
+        <div class="focus-fill" style="height:${fillPct}%;background:${color};"></div>
+      </div>
+      <div class="focus-meta">
+        <div class="focus-line">${pct}% - ${compactProduct(t.product)}</div>
+        <div class="muted small">${formatLiters(t.capacity_l)}</div>
+      </div>
+    `;
+    panel.appendChild(card);
+  });
+}
+
+
+
+function renderSensorPanel(centers) {
+
+  const grid = document.getElementById("sensor-grid");
+
+  if (!grid) return;
+
+  grid.innerHTML = "";
+
+  const ordered = sortCentersByAlert(centers || []);
+
+  if (!ordered.length) {
+
+    grid.innerHTML = `<div class="muted small">Sin datos.</div>`;
+
+    return;
+
+  }
+
+  const metrics = [
+
+    { label: "pH", path: ["ph"], digits: 2, suffix: "" },
+
+    { label: "CE", path: ["ec"], digits: 2, suffix: " mS" },
+
+    { label: "pH dr", path: ["drain_ph"], digits: 2, suffix: "" },
+
+    { label: "CE dr", path: ["drain_ec"], digits: 2, suffix: " mS" },
+
+    { label: "Temp", path: ["climate", "temp_c"], digits: 1, suffix: " C" },
+
+    { label: "Hum", path: ["climate", "humidity_pct"], digits: 0, suffix: "%" },
+
+    { label: "VPD", path: ["climate", "vpd"], digits: 2, suffix: " kPa" },
+
+    { label: "Mix", path: ["fertilizer", "mix_l"], digits: 0, suffix: " L" },
+
+    { label: "Bar", path: ["fertilizer", "pressure_bar"], digits: 2, suffix: " bar" },
+
+  ];
+
+  const matrix = document.createElement("div");
+
+  matrix.className = "matrix";
+
+  const colStyle = `grid-template-columns: 120px repeat(${ordered.length}, minmax(90px,1fr));`;
+
+  const head = document.createElement("div");
+
+  head.className = "matrix-row head";
+
+  head.setAttribute("style", colStyle);
+
+  head.innerHTML = `<div class="matrix-cell label">Var</div>${ordered
+
+    .map((c) => `<div class="matrix-cell">${c.name}</div>`)
+
+    .join("")}`;
+
+  matrix.appendChild(head);
+
+  metrics.forEach((m) => {
+
+    const row = document.createElement("div");
+
+    row.className = "matrix-row";
+
+    row.setAttribute("style", colStyle);
+
+    row.innerHTML = `<div class="matrix-cell label">${m.label}</div>${ordered
+
+      .map((c) => {
+
+        const avg = averageSensor(c.tanks || [], m.path, m.digits);
+
+        return `<div class="matrix-cell">${avg}${avg !== "-" ? m.suffix : ""}</div>`;
+
+      })
+
+      .join("")}`;
+
+    matrix.appendChild(row);
+
+  });
+
+  grid.appendChild(matrix);
+
+}
+
+function renderSingleCenterMatrix(center) {
+
+  const grid = document.getElementById("center-matrix");
+
+  if (!grid || !center) return;
+
+  grid.innerHTML = "";
+
+  const metrics = [
+    { label: "pH", path: ["ph"], digits: 2, suffix: "" },
+    { label: "CE", path: ["ec"], digits: 2, suffix: " mS" },
+    { label: "pH dr", path: ["drain_ph"], digits: 2, suffix: "" },
+    { label: "CE dr", path: ["drain_ec"], digits: 2, suffix: " mS" },
+    { label: "Temp", path: ["climate", "temp_c"], digits: 1, suffix: " C" },
+    { label: "Hum", path: ["climate", "humidity_pct"], digits: 0, suffix: "%" },
+    { label: "VPD", path: ["climate", "vpd"], digits: 2, suffix: " kPa" },
+    { label: "Mix", path: ["fertilizer", "mix_l"], digits: 0, suffix: " L" },
+    { label: "Bar", path: ["fertilizer", "pressure_bar"], digits: 2, suffix: " bar" },
+  ];
+
+  const colStyle = "grid-template-columns: 120px 1fr;";
+
+  const matrix = document.createElement("div");
+
+  matrix.className = "matrix";
+
+  metrics.forEach((m) => {
+
+    const row = document.createElement("div");
+
+    row.className = "matrix-row";
+
+    row.setAttribute("style", colStyle);
+
+    const avg = averageSensor(center.tanks || [], m.path, m.digits);
+
+    row.innerHTML = `<div class="matrix-cell label">${m.label}</div><div class="matrix-cell">${avg}${avg !== "-" ? m.suffix : ""}</div>`;
+
+    matrix.appendChild(row);
+
+  });
+
+  grid.appendChild(matrix);
+
+}
+
+
+
+function renderSensorSummary(centers) {
+
+  const summary = document.getElementById("sensor-summary");
+
+  const bubbles = document.getElementById("sensor-bubbles");
+
+  if (!summary || !bubbles) return;
+
+  const tanks = centers.flatMap((c) => c.tanks || []);
+
+  if (!tanks.length) return;
+
+  summary.textContent = "";
+
+  bubbles.innerHTML = "";
+
+  centers.forEach((c) => {
+
+    const el = document.createElement("div");
+
+    el.className = "bubble";
+
+    el.textContent = `${c.name}: ${c.avg_ph} pH - ${c.avg_ec} CE`;
+
+    bubbles.appendChild(el);
+
+  });
+
+}
+
+
+
+function renderSensorDetail(centers) {
+
+  const select = document.getElementById("sensor-center-filter");
+
+  const detail = document.getElementById("sensor-detail");
+
+  if (!select || !detail) return;
+
+  if (!select.options.length) {
+
+    select.innerHTML = centers.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+
+  }
+
+  const centerId = select.value || centers[0]?.id;
+
+  select.value = centerId;
+
+  const center = centers.find((c) => c.id === centerId) || centers[0];
+
+  detail.innerHTML = "";
+
+  center?.tanks.forEach((t) => {
+
+    const card = document.createElement("div");
+
+    card.className = "sensor-detail-card";
+
+    card.innerHTML = `
+
+      <div class="row"><strong>${t.label}</strong><span class="status ${t.status}">${t.percentage}%</span></div>
+
+      <div class="sensor-row"><span>pH ${t.sensors.ph}</span><span>CE ${t.sensors.ec} mS/cm</span></div>
+
+      <div class="sensor-row"><span>Drenaje pH ${t.sensors.drain_ph}</span><span>Drenaje CE ${t.sensors.drain_ec} mS/cm</span></div>
+
+      <div class="sensor-row"><span>Temp ${t.sensors.climate.temp_c} C</span><span>Humedad ${t.sensors.climate.humidity_pct}%</span><span>VPD ${t.sensors.climate.vpd}</span></div>
+
+      <div class="sensor-row"><span>Vol. fertilizante ${formatLiters(t.sensors.fertilizer.mix_l)}</span><span>Presion ${t.sensors.fertilizer.pressure_bar} bar</span></div>
+
+    `;
+
+    detail.appendChild(card);
+
+  });
+
+  select.onchange = () => renderSensorDetail(centers);
+
+}
+
+
+
+function renderAlarms(alerts, targetId = "alarms-panel") {
+
+  const box = document.getElementById(targetId);
+
+  if (!box) return;
+
+  box.innerHTML = "";
+
+  if (!alerts.length) {
+
+    box.innerHTML = `<div class="muted small">Sin alarmas activas</div>`;
+
+    return;
+
+  }
+
+  const sevOrder = { alta: 2, media: 1, baja: 0 };
+
+  alerts
+
+    .slice()
+
+    .sort((a, b) => (sevOrder[b.severity] || 0) - (sevOrder[a.severity] || 0))
+
+    .forEach((a) => {
+
+      const card = document.createElement("div");
+
+      const color = a.severity === "alta" ? statusColor.critical : statusColor.warn;
+
+      card.className = "alert-card";
+
+      card.innerHTML = `
+
+        <div class="alert-top">
+
+          <span>${a.center}</span>
+
+          <span class="alert-dot" style="background:${color};"></span>
+
+        </div>
+
+        <div class="alert-mini">${a.tank_id} - ${a.message}</div>
+
+      `;
+
+      box.appendChild(card);
+
+    });
+
+}
+
+function renderCenterAlerts(center, alerts) {
+
+  const panel = document.getElementById("center-alerts");
+
+  if (!panel) return;
+
+  const centerName = center?.name;
+
+  const filtered = (alerts || []).filter((a) => a.center === centerName);
+
+  renderAlarms(filtered, "center-alerts");
+
+}
+
+function renderCenterRoutes(center, state) {
+
+  const box = document.getElementById("center-routes");
+
+  if (!box || !center) return;
+
+  box.innerHTML = "";
+
+  const related = state.routes.filter((r) =>
+    r.stops?.some((s) => s.center_id === center.id)
+  );
+
+  if (!related.length) {
+    box.innerHTML = `<div class="muted">Sin rutas activas en este centro.</div>`;
+    return;
+  }
+
+  related.forEach((r) => {
+    const stop = r.stops?.find((s) => s.center_id === center.id) || r.stops?.[r.current_stop_idx];
+    const tankLabel = center.tanks.find((t) => t.id === stop?.tank_id)?.label || stop?.tank_id || "";
+    const card = document.createElement("div");
+    card.className = "route-card";
+    card.innerHTML = `
+      <div class="row">
+        <strong>${r.truck_id} - ${r.id}</strong>
+        <span class="status">${routeStatusLabel[r.status] || r.status}</span>
+      </div>
+      <div class="tank-meta">
+        <span>${tankLabel}</span>
+        <span>${compactProduct(stop?.product || r.product_type || "-")}</span>
+      </div>
+      <div class="tank-meta">
+        <span>${formatLiters(stop?.liters || 0)}</span>
+        <span>${formatLiters(r.total_delivered || 0)}</span>
+      </div>
+    `;
+    box.appendChild(card);
+  });
+}
+
+
+
+function renderActiveRoutes(routes, centers) {
+
+  const box = document.getElementById("active-routes");
+
+  if (!box) return;
+
+  box.innerHTML = "";
+
+  if (!routes.length) {
+
+    box.innerHTML = `<div class="muted">Sin rutas activas por ahora.</div>`;
+
+    return;
+
+  }
+
+  routes.forEach((r) => {
+
+    const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
+
+    const center = centers.find((c) => c.id === stop?.center_id);
+
+    const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
+
+    const card = document.createElement("div");
+
+    card.className = "route-card";
+
+    const statusLabel = routeStatusLabel[r.status] || r.status;
+
+    const centerStatus = worstStatus(center?.tanks || []);
+
+    const statusClass = centerStatus === "critical" ? "critical" : centerStatus === "warn" ? "warn" : "ok";
+
+    card.innerHTML = `
+
+      <div class="row">
+        <strong>${r.truck_id} · ${r.worker}</strong>
+        <span class="status ${statusClass}">${statusLabel}</span>
+      </div>
+      <div class="tank-meta">
+        <span>${center ? center.name : stop?.center_id || "-"}</span>
+        <span>${tank ? tank.label : stop?.tank_id || ""}</span>
+      </div>
+      <div class="tank-meta">
+        <span>${compactProduct(stop?.product || r.product_type || "-")}</span>
+        <span>${formatLiters(stop?.liters || 0)} plan</span>
+      </div>
+      <div class="tank-meta">
+        <span>Entregado: ${formatLiters(r.total_delivered || 0)}</span>
+        <span>${stop?.arrival_at ? formatDatePlus1(stop.arrival_at) : ""}</span>
+      </div>
+
+    `;
+
+  box.appendChild(card);
+
+});
+
+}
+
+function renderWorkerRoutes(state) {
+
+  const session = ensureWorkerSession();
+
+  const list = document.getElementById("worker-active");
+
+  const historyBox = document.getElementById("worker-history");
+
+  if (!list || !historyBox) return;
+
+  list.innerHTML = "";
+
+  historyBox.innerHTML = "";
+
+  if (!session) {
+
+    list.innerHTML = `<div class="muted">Inicia sesion de operario.</div>`;
+
+    return;
+
+  }
+
+  const active = state.routes.filter((r) => r.worker === session.user);
+
+  if (!active.length) {
+
+    list.innerHTML = `<div class="muted">Sin rutas activas.</div>`;
+
+  } else {
+
+    active.forEach((r) => {
+
+      const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
+
+      const center = state.centers.find((c) => c.id === stop?.center_id);
+
+      const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
+
+      const card = document.createElement("div");
+
+      card.className = "route-card emphasis";
+
+      card.innerHTML = `
+        <div class="row">
+          <strong>${r.truck_id} · ${r.id}</strong>
+          <span class="status badge">${routeStatusLabel[r.status] || r.status}</span>
+        </div>
+        <div class="tank-meta">
+          <span>${center ? center.name : stop?.center_id || "-"}</span>
+          <span>${tank ? tank.label : stop?.tank_id || ""}</span>
+        </div>
+        <div class="tank-meta">
+          <span>${compactProduct(stop?.product || r.product_type || "-")}</span>
+          <span>${formatLiters(stop?.liters || 0)} plan</span>
+        </div>
+        <div class="tank-meta highlight-row">
+          <span>Entregado: ${formatLiters(r.total_delivered || 0)}</span>
+          <span>${stop?.arrival_at ? formatDatePlus1(stop.arrival_at) : ""}</span>
+        </div>
+      `;
+      list.appendChild(card);
+    });
+
+  }
+
+  const history = state.route_history
+    .filter((r) => r.worker === session.user)
+    .slice(0, 8);
+
+  if (!history.length) {
+
+    historyBox.innerHTML = `<li>Sin historico</li>`;
+
+  } else {
+
+    history.forEach((r) => {
+
+      const li = document.createElement("li");
+
+      const firstStop = r.stops?.[0];
+      const lastStop = r.stops?.[r.stops.length - 1];
+      const centerName = firstStop?.center_id || "-";
+      li.innerHTML = `<strong>${r.id}</strong> ${r.truck_id} · ${centerName} · ${formatLiters(r.total_delivered || 0)} · <span class="chip soft">${routeStatusLabel[r.status] || r.status}</span> · ${formatDatePlus1(r.finished_at || r.started_at)}`;
+
+      historyBox.appendChild(li);
+
+    });
+
+  }
+
+}
+
+
+
+function updateStepPills(state) {
+  const pills = document.querySelectorAll("[data-step-pill]");
+  if (!pills.length) return;
+  const session = ensureWorkerSession();
+  let statuses = ["idle", "idle", "idle", "idle"];
+  if (session && state?.routes?.length) {
+    const route = state.routes.find((r) => r.worker === session.user);
+    if (route) {
+      statuses = ["done", "idle", "idle", "idle"];
+      if (route.status === "finalizada") {
+        statuses = ["done", "done", "done", "done"];
+      } else if (route.status === "regresando") {
+        statuses = ["done", "done", "current", "idle"];
+      } else {
+        statuses[1] = "current";
+      }
+    }
+  }
+  pills.forEach((pill) => {
+    pill.classList.remove("done", "current");
+    const idx = parseInt(pill.getAttribute("data-step-pill") || "0", 10) - 1;
+    const st = statuses[idx] || "idle";
+    if (st === "done") pill.classList.add("done");
+    if (st === "current") pill.classList.add("current");
+  });
+}
+
+
+
+function renderLog(logItems) {
+
+  const log = document.getElementById("delivery-log");
+
+  if (!log) return;
+
+  const rangeEl = document.getElementById("filter-range");
+  const workerEl = document.getElementById("filter-worker");
+  const centerEl = document.getElementById("filter-center");
+
+  const buildSwitch = (el, options, current, onChange) => {
+    if (!el) return;
+    el.innerHTML = options
+      .map(
+        (opt) =>
+          `<button class="pill-btn ${current === opt.value ? "active" : ""}" data-value="${opt.value}">${opt.label}</button>`
+      )
+      .join("");
+    el.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = () => {
+        onChange(btn.getAttribute("data-value"));
+      };
+    });
+  };
+
+  buildSwitch(
+    rangeEl,
+    [
+      { label: "24h", value: "24h" },
+      { label: "3d", value: "3d" },
+      { label: "Todos", value: "all" },
+    ],
+    logFilters.range,
+    (val) => {
+      logFilters.range = val;
+      renderLog(logItems);
+    }
+  );
+
+  const workers = ["all", ...new Set((logItems || []).map((i) => i.by).filter(Boolean))];
+  buildSwitch(
+    workerEl,
+    workers.map((w) => ({ label: w === "all" ? "Todos" : w, value: w })),
+    logFilters.worker,
+    (val) => {
+      logFilters.worker = val;
+      renderLog(logItems);
+    }
+  );
+
+  const centers = ["all", ...new Set((logItems || []).map((i) => i.center).filter(Boolean))];
+  buildSwitch(
+    centerEl,
+    centers.map((c) => ({ label: c === "all" ? "Centros" : c, value: c })),
+    logFilters.center,
+    (val) => {
+      logFilters.center = val;
+      renderLog(logItems);
+    }
+  );
+
+  log.innerHTML = "";
+
+  if (!logItems || !logItems.length) {
+
+    log.innerHTML = `<li>Sin descargas recientes</li>`;
+
+    return;
+
+  }
+
+  const now = Date.now();
+  const filtered = logItems.filter((item) => {
+    if (logFilters.worker !== "all" && item.by !== logFilters.worker) return false;
+    if (logFilters.center !== "all" && item.center !== logFilters.center) return false;
+    if (logFilters.range === "24h") {
+      if (now - new Date(item.ts).getTime() > 24 * 3600 * 1000) return false;
+    } else if (logFilters.range === "3d") {
+      if (now - new Date(item.ts).getTime() > 3 * 24 * 3600 * 1000) return false;
+    }
+    return true;
+  });
+
+  if (!filtered.length) {
+    log.innerHTML = `<li>Sin registros con ese filtro</li>`;
+    return;
+  }
+
+  filtered.forEach((item) => {
+
+    const ts = formatDatePlus1(item.ts);
+
+    const li = document.createElement("li");
+
+    li.innerHTML = `<strong>${ts}</strong> ${item.truck_id} -> ${item.center} (${formatLiters(item.delivered_l)}) - ${item.by} - ${item.note}`;
+
+    log.appendChild(li);
+
+  });
+
+}
+
+function renderWorkerFlow(state) {
+  const box = document.getElementById("worker-flow");
+  if (!box) return;
+  const rows = [];
+  state.routes.forEach((r) => {
+    rows.push({
+      worker: r.worker,
+      ruta: r.id,
+      evento: routeStatusLabel[r.status] || r.status,
+      hora: formatDatePlus1(r.started_at),
+    });
+  });
+  state.route_history.forEach((r) => {
+    const last = r.history?.[r.history.length - 1];
+    rows.push({
+      worker: r.worker,
+      ruta: r.id,
+      evento: last ? `${last.event}` : "finalizada",
+      hora: formatDatePlus1(r.finished_at || last?.ts),
+    });
+  });
+  if (!rows.length) {
+    box.innerHTML = `<div class="muted">Sin movimientos.</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="excel-row head" style="grid-template-columns: repeat(4, minmax(120px,1fr));">
+      <div class="excel-cell">Operario</div>
+      <div class="excel-cell">Ruta</div>
+      <div class="excel-cell">Evento</div>
+      <div class="excel-cell">Hora</div>
+    </div>
+    ${rows
+      .map(
+        (r) => `
+          <div class="excel-row" style="grid-template-columns: repeat(4, minmax(120px,1fr));">
+            <div class="excel-cell">${r.worker}</div>
+            <div class="excel-cell">${r.ruta}</div>
+            <div class="excel-cell">${r.evento}</div>
+            <div class="excel-cell">${r.hora}</div>
+          </div>
+        `
+      )
+      .join("")}
+  `;
+}
+
+function initMap(targetId, center) {
+  const m = L.map(targetId).setView([center.lat, center.lon], 12);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+  }).addTo(m);
+  return m;
+}
+
+
+
+function dropletIcon(color) {
+
+  return `<svg width="28" height="34" viewBox="0 0 28 34" xmlns="http://www.w3.org/2000/svg">
+
+    <path d="M14 2 C14 2 4 14 4 22 a10 10 0 0020 0C24 14 14 2 14 2z" fill="${color}" stroke="#0c1420" stroke-width="2"/>
+
+    <circle cx="10" cy="16" r="3" fill="rgba(255,255,255,0.4)"/>
+
+  </svg>`;
+
+}
+
+
+
+function truckSvg(tr) {
+
+  const color = truckColor[tr.status] || "#9aa7b8";
+
+  const cab = tr.status === "returning" ? "#d8e4f0" : "#eef3f8";
+
+  return `
+
+    <svg width="52" height="36" viewBox="0 0 104 72" xmlns="http://www.w3.org/2000/svg">
+
+      <rect x="8" y="26" width="66" height="26" rx="7" fill="#dfe7f1" stroke="#0c1420" stroke-width="3"/>
+
+      <rect x="12" y="30" width="58" height="18" rx="6" fill="${color}"/>
+
+      <rect x="64" y="18" width="26" height="22" rx="5" fill="${cab}" stroke="#0c1420" stroke-width="3"/>
+
+      <rect x="74" y="22" width="10" height="10" rx="2" fill="rgba(0,0,0,0.08)"/>
+
+      <rect x="70" y="30" width="12" height="8" rx="2" fill="${color}"/>
+
+      <circle cx="28" cy="54" r="8" fill="#0f1724" stroke="#e0e7ef" stroke-width="4"/>
+
+      <circle cx="62" cy="54" r="8" fill="#0f1724" stroke="#e0e7ef" stroke-width="4"/>
+
+      <circle cx="82" cy="54" r="8" fill="#0f1724" stroke="#e0e7ef" stroke-width="4"/>
+
+    </svg>
+
+  `;
+
+}
+
+
+
+function truckPopup(tr) {
+
+  const color = truckColor[tr.status] || "#9aa7b8";
+
+  return `
+
+    <div class="map-popup">
+
+      <strong>${tr.id} - ${tr.driver}</strong>
+
+      <div class="chip" style="background:${color};color:#0c1420;">${truckStatusLabel[tr.status] || tr.status}</div>
+
+      <div class="tank-meta">
+
+        <span>Carga ${formatLiters(tr.current_load_l)} / ${formatLiters(tr.capacity_l)}</span>
+
+        <span>Destino ${tr.destination?.name || "Almacen"}</span>
+
+      </div>
+
+      <div class="tank-meta">
+
+        <span>Tiempo estimado: ${tr.eta_minutes ? tr.eta_minutes + " min" : "n/d"}</span>
+
+        <span>${tr.notes || ""}</span>
+
+      </div>
+
+    </div>
+
+  `;
+
+}
+
+
+
+function renderMap(state, targetId = "map") {
+  const container = document.getElementById(targetId);
+  if (!container) return;
+
+  if (!mapInstances[targetId]) {
+    mapInstances[targetId] = initMap(targetId, state.warehouse);
+    tankMarkerSets[targetId] = {};
+    truckMarkerSets[targetId] = {};
+  }
+  const mapObj = mapInstances[targetId];
+  const tankMarkers = tankMarkerSets[targetId];
+  const truckMarkers = truckMarkerSets[targetId];
+
+  const allTanks = state.centers.flatMap((c) => c.tanks.map((t) => ({ ...t, center: c.name })));
+  allTanks.forEach((t) => {
+    const icon = L.divIcon({
+      html: dropletIcon(statusColor[t.status]),
+      className: "",
+      iconSize: [28, 34],
+      iconAnchor: [14, 17],
+    });
+    const coords = [t.location.lat, t.location.lon];
+    if (!tankMarkers[t.id]) {
+      tankMarkers[t.id] = L.marker(coords, { icon }).addTo(mapObj);
+    } else {
+      tankMarkers[t.id].setLatLng(coords);
+      tankMarkers[t.id].setIcon(icon);
+    }
+    const tooltipHtml = `
+      <div class="map-popup">
+        <strong>${t.center} / ${t.label}</strong>
+        <div>${t.percentage}% - ${formatLiters(t.current_l)}</div>
+        <div>${t.product}</div>
+        <div>pH ${t.sensors.ph} - CE ${t.sensors.ec} mS/cm</div>
+      </div>`;
+    tankMarkers[t.id].unbindTooltip();
+    tankMarkers[t.id].bindTooltip(tooltipHtml, {
+      direction: "top",
+      offset: [0, -10],
+      opacity: 0.95,
+      className: "map-tooltip",
+    });
+  });
+
+  state.trucks.forEach((tr) => {
+    const icon = L.divIcon({
+      html: truckSvg(tr),
+      className: "",
+      iconSize: [52, 36],
+      iconAnchor: [26, 18],
+    });
+    const lat = tr.position?.lat || state.warehouse.lat;
+    const lon = tr.position?.lon || state.warehouse.lon;
+    if (!truckMarkers[tr.id]) {
+      truckMarkers[tr.id] = L.marker([lat, lon], { icon }).addTo(mapObj);
+    } else {
+      truckMarkers[tr.id].setLatLng([lat, lon]);
+      truckMarkers[tr.id].setIcon(icon);
+    }
+    truckMarkers[tr.id].unbindTooltip();
+    truckMarkers[tr.id].bindTooltip(truckPopup(tr), {
+      direction: "top",
+      offset: [0, -12],
+      opacity: 0.98,
+      className: "map-tooltip",
+    });
+  });
+}
+
+
+
+async function initHome() {
+
+  const drainBtn = document.getElementById("btn-drain");
+
+  drainBtn?.addEventListener("click", async () => {
+
+    await postJSON("/api/simulate-drain", {});
+
+    flash("Variacion simulada en depositos y sensores.");
+
+    loadHome();
+
+  });
+
+  const startBtn = document.getElementById("btn-start-route");
+
+  startBtn?.addEventListener("click", () => {
+
+    const session = ensureWorkerSession();
+
+    if (session) {
+
+      window.location.href = "/salida";
+
+    } else {
+
+      window.openSessionModal?.("worker");
+
+    }
+
+  });
+
+  const loginForm = document.getElementById("login-form");
+  loginForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      username: loginForm.username.value,
+      password: loginForm.password.value,
+      role: loginForm.role.value,
+    };
+    const res = await postJSON("/api/login", body);
+    if (!res.ok) {
+      flash(res.error || "Credenciales invalidas");
+      return;
+    }
+    if (res.role === "admin") {
+      clearSession("workerSession");
+      saveSession("adminSession", { user: body.username });
+    } else {
+      clearSession("adminSession");
+      saveSession("workerSession", { user: body.username });
+    }
+    refreshSessionBadges();
+    toggleGate(false);
+    flash("Sesion iniciada");
+    loadHome();
+  });
+
+  loadHome();
+
+  setInterval(loadHome, 15000);
+
+}
+
+
+
+async function loadHome() {
+
+  const adminSession = getSession("adminSession");
+  const workerSession = ensureWorkerSession();
+  const hasSession = !!adminSession || !!workerSession;
+
+  document.querySelectorAll(".admin-only").forEach((el) => (el.style.display = adminSession ? "block" : "none"));
+  document.querySelectorAll(".worker-only").forEach((el) => (el.style.display = adminSession ? "none" : "block"));
+  const adminButtons = document.querySelectorAll(".admin-only-button");
+  adminButtons.forEach((el) => (el.style.display = adminSession ? "inline-flex" : "none"));
+  toggleGate(!hasSession);
+  if (!hasSession) return;
+
+  const cached = getCachedState();
+  if (cached) {
+    if (adminSession) {
+      renderCenters(cached.centers || []);
+      renderSensorSummary(cached.centers || []);
+      renderSensorPanel(cached.centers || []);
+      renderAlarms(cached.alerts || []);
+      renderActiveRoutes(cached.routes || [], cached.centers || []);
+      renderLog(cached.delivery_log || []);
+      renderMap(cached, "map-admin");
+      renderWorkerFlow(cached);
+    } else {
+      renderWorkerRoutes(cached);
+      renderMap(cached, "map-worker");
+      updateStepPills(cached);
+    }
+  }
+
+  const state = await fetchState();
+  if (adminSession) {
+    renderCenters(state.centers);
+    renderSensorSummary(state.centers);
+    renderSensorPanel(state.centers);
+    renderAlarms(state.alerts);
+    renderActiveRoutes(state.routes, state.centers);
+    renderLog(state.delivery_log);
+    renderMap(state, "map-admin");
+    renderWorkerFlow(state);
+  } else {
+    renderWorkerRoutes(state);
+    renderMap(state, "map-worker");
+    updateStepPills(state);
+  }
+}
+
+function ensureWorkerSession() {
+
+  return getSession("workerSession");
+
+}
+
+
+
+function populateDestinations(centers, container) {
+
+  const addRow = () => {
+
+    const row = document.createElement("div");
+
+    row.className = "destination-item";
+
+    row.innerHTML = `
+
+      <div class="row">
+
+        <strong>Destino</strong>
+
+        <button type="button" class="mini-btn remove-destination">Quitar</button>
+
+      </div>
+
+      <div class="form-grid">
+
+        <label>Centro<select class="center-select"></select></label>
+
+        <label>Deposito<select class="tank-select"></select></label>
+
+        <label>Litros<input type="number" class="liters-input" value="2000" step="100" min="0" /></label>
+
+        <label>Producto<input class="product-input" placeholder="Producto especifico (opcional)" /></label>
+
+      </div>
+
+    `;
+
+    container.appendChild(row);
+
+    const centerSelect = row.querySelector(".center-select");
+
+    const tankSelect = row.querySelector(".tank-select");
+
+    centerSelect.innerHTML = centers.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+
+    const setTanks = () => {
+
+      const centerId = centerSelect.value;
+
+      const center = centers.find((c) => c.id === centerId);
+
+      if (!center) return;
+
+      tankSelect.innerHTML = center.tanks.map((t) => `<option value="${t.id}">${t.label} - ${t.product}</option>`).join("");
+
+    };
+
+    centerSelect.addEventListener("change", setTanks);
+
+    setTanks();
+
+    row.querySelector(".remove-destination").addEventListener("click", () => {
+
+      if (container.children.length > 1) {
+
+        row.remove();
+
+      }
+
+    });
+
+  };
+
+
+
+  addRow();
+
+  const addBtn = document.getElementById("add-destination");
+
+  addBtn?.addEventListener("click", addRow);
+
+}
+
+
+
+function renderTruckGrid(trucks) {
+
+  const grid = document.getElementById("truck-grid");
+
+  if (!grid) return;
+
+  grid.innerHTML = "";
+
+  trucks.forEach((tr) => {
+
+    const card = document.createElement("div");
+
+    card.className = "truck-card";
+
+    card.innerHTML = `
+
+      <strong>${tr.id} - ${tr.driver}</strong>
+
+      <div class="muted">${truckStatusLabel[tr.status] || tr.status}</div>
+
+      <div class="tank-meta">
+
+        <span>${formatLiters(tr.current_load_l)}</span>
+
+        <span>${tr.destination?.name || "Almacen"}</span>
+
+      </div>
+
+    `;
+
+    grid.appendChild(card);
+
+  });
+
+}
+
+
+
+function renderMiniCenters(centers) {
+
+  const grid = document.getElementById("mini-centers");
+
+  if (!grid) return;
+
+  grid.innerHTML = "";
+
+  centers.forEach((c) => {
+
+    const min = document.createElement("div");
+
+    min.className = "mini-card";
+
+    const avgLevel = c.tanks.reduce((acc, t) => acc + t.percentage, 0) / c.tanks.length;
+
+    min.innerHTML = `<strong>${c.name}</strong><div class="muted">Nivel medio ${avgLevel.toFixed(1)}%</div>`;
+
+    grid.appendChild(min);
+
+  });
+
+}
+
+
+async function initCenterPage() {
+
+  refreshSessionBadges();
+
+  const centerId = document.body.dataset.centerId;
+
+  const setSubtitle = (text) => {
+
+    const sub = document.getElementById("center-sub");
+
+    if (sub) sub.textContent = text;
+
+  };
+
+  const load = async () => {
+
+    const state = await fetchState();
+
+    const center = state.centers.find((c) => c.id === centerId);
+
+    if (!center) {
+
+      flash("Centro no encontrado");
+
+      window.location.href = "/";
+
+      return;
+
+    }
+
+    renderCenterDetail(center, { targetId: "center-tanks", titleId: "center-title", statusId: "center-status" });
+
+    renderSingleCenterMatrix(center);
+
+    renderCenterAlerts(center, state.alerts);
+
+    renderCenterRoutes(center, state);
+
+    renderMap(state);
+    const mapObj = mapInstances["map"];
+    if (mapObj) mapObj.setView([center.location.lat, center.location.lon], 12);
+
+    setSubtitle(`${center.tanks.length} depositos - pH ${center.avg_ph} - CE ${center.avg_ec}`);
+
+  };
+
+  load();
+
+  setInterval(load, 20000);
+
+}
+
+
+
+async function initSalida() {
+
+  refreshSessionBadges();
+
+  const state = await fetchState();
+
+  const centers = state.centers;
+
+  const form = document.getElementById("plan-route-form");
+
+  const originInput = document.getElementById("origin-input");
+
+  const productInput = document.getElementById("product-type");
+
+  const loadInput = document.getElementById("load-input");
+
+  if (originInput && !originInput.value) originInput.value = state.warehouse.name;
+
+
+
+  const truckSelect = document.getElementById("truck-select");
+
+  if (truckSelect) {
+
+    truckSelect.innerHTML = state.trucks
+
+      .map((t) => `<option value="${t.id}">${t.id} - ${t.driver} (${truckStatusLabel[t.status]})</option>`)
+
+      .join("");
+
+  }
+
+
+
+  const destContainer = document.getElementById("destinations");
+
+  if (destContainer) populateDestinations(centers, destContainer);
+
+  renderTruckGrid(state.trucks);
+
+  renderMiniCenters(centers);
+
+
+
+  const qrTruckSelect = document.getElementById("qr-truck-select");
+
+  qrTruckSelect?.addEventListener("change", (e) => {
+
+    const code = e.target.value;
+
+    const profile = truckQRProfiles[code];
+
+    if (!profile) return;
+
+    if (truckSelect) truckSelect.value = profile.truck_id;
+
+    if (productInput) productInput.value = profile.product_type;
+
+    if (loadInput) loadInput.value = profile.load_l;
+
+    if (originInput) originInput.value = state.warehouse?.name || originInput.value;
+
+    flash(`QR del camion ${profile.truck_id} escaneado`);
+
+  });
+
+
+
+  form?.addEventListener("submit", async (e) => {
+
+    e.preventDefault();
+
+    const session = ensureWorkerSession();
+
+    if (!session) {
+
+      flash("Inicia sesion antes de planificar la ruta.");
+
+      window.openSessionModal?.("worker");
+
+      return;
+
+    }
+
+    const stops = Array.from(destContainer?.children || []).map((row) => ({
+
+      center_id: row.querySelector(".center-select")?.value,
+
+      tank_id: row.querySelector(".tank-select")?.value,
+
+      liters: Number(row.querySelector(".liters-input")?.value) || 0,
+
+      product: row.querySelector(".product-input")?.value,
+
+    }));
+
+    if (!stops.length) {
+
+      flash("Agrega al menos un destino.");
+
+      return;
+
+    }
+
+    const body = {
+
+      worker: session.user,
+
+      truck_id: form.truck_id.value,
+
+      origin: form.origin.value,
+
+      product_type: form.product_type.value,
+
+      load_l: Number(form.load_l.value),
+
+      stops,
+
+    };
+
+    const res = await postJSON("/api/routes/plan", body);
+
+    if (!res.ok) {
+
+      flash(res.error || "Error al crear ruta");
+
+      return;
+
+    }
+
+    saveSession("activeRouteId", res.route.id);
+
+    flash("Ruta creada. Ve al paso de llegada a destino.");
+
+    window.location.href = "/destino";
+
+  });
+
+}
+
+
+
+function buildRouteView(route, centers) {
+
+  if (!route) return `<div class="muted">No hay ruta activa. Vuelve a la salida para crear una.</div>`;
+
+  const stop = route.stops?.[route.current_stop_idx] || route.stops?.[route.stops.length - 1];
+
+  const center = centers.find((c) => c.id === stop?.center_id);
+
+  const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
+
+  const arrival = stop?.arrival_at ? new Date(stop.arrival_at) : null;
+
+  const depart = stop?.depart_at ? new Date(stop.depart_at) : null;
+
+  const duration = arrival ? minutesBetween(arrival, depart || new Date()) : null;
+
+  const hasMore = route.current_stop_idx + 1 < route.stops.length;
+
+  return `
+
+    <div class="route-card big">
+
+      <h3>${center ? center.name : stop?.center_id || "-"} · ${tank ? tank.label : stop?.tank_id || ""}</h3>
+
+      <div class="row">
+        <div class="muted">${route.id} · ${route.truck_id}</div>
+        <span class="status ${route.status === "en_destino" ? "warn" : "ok"}">${routeStatusLabel[route.status] || route.status}</span>
+      </div>
+
+      <div class="tank-meta">
+
+        <span>${compactProduct(stop?.product || route.product_type || "-")}</span>
+
+        <span>${formatLiters(stop?.liters || 0)} plan</span>
+
+      </div>
+
+      <div class="tank-meta">
+
+        <span>${arrival ? formatDatePlus1(arrival) : "Llegada pendiente"}</span>
+
+        <span>${formatLiters(route.total_delivered || 0)} entregado</span>
+
+      </div>
+
+    </div>
+
+    <div class="stack">
+
+      ${arrival ? "" : `<button class="btn" id="btn-arrive-stop">Marcar llegada</button>`}
+
+      <form id="complete-stop-form" class="stack destination-item">
+
+        <label>Litros descargados<input type="number" name="delivered" value="${stop?.liters || 0}" step="100" min="0" /></label>
+
+        <label>Notas<input name="note" placeholder="Observaciones" /></label>
+
+        <button class="btn" type="submit" ${!arrival || depart ? "disabled" : ""}>Finalizar descarga y salir</button>
+
+      </form>
+
+      ${
+
+        hasMore
+
+          ? `<div class="chip muted">Tras este destino se cargara el siguiente en la ruta.</div>`
+
+          : `<div class="chip muted">Ultimo destino. Al cerrar pasaras a regreso.</div>`
+
+      }
+
+    </div>
+
+    <div class="timeline-head">Todos los destinos</div>
+
+    <div class="timeline">
+
+      ${route.stops
+
+        .map((s, idx) => {
+
+          const c = centers.find((cc) => cc.id === s.center_id);
+
+          return `<div class="timeline-item">${idx + 1}. ${c ? c.name : s.center_id} / ${s.tank_id} - ${
+
+            s.status || "pendiente"
+
+          } - ${s.arrival_at ? formatDatePlus1(s.arrival_at) : "esperando"}</div>`;
+
+        })
+
+        .join("")}
+
+    </div>
+
+    ${
+
+      route.status === "regresando"
+
+        ? `<div class="chip">Ruta en retorno. Marca llegada para cerrar ciclo.</div><button class="btn" id="cta-arrival">Marcar llegada a almacen</button>`
+
+        : ""
+
+    }
+
+  `;
+
+}
+
+
+
+async function initDestino() {
+
+  refreshSessionBadges();
+
+
+
+  async function load() {
+
+    const state = await fetchState();
+
+    const session = ensureWorkerSession();
+
+    const routeId = getSession("activeRouteId");
+
+    let route = state.routes.find((r) => r.id === routeId);
+
+    if (!route && session) {
+
+      route = state.routes.find((r) => r.worker === session.user);
+
+    }
+
+    const container = document.getElementById("route-container");
+
+    if (!container) return;
+
+    const qrSelect = document.getElementById("qr-center-select");
+
+    if (qrSelect && !route) {
+
+      qrSelect.innerHTML = `<option value="">Sin ruta activa</option>`;
+
+      qrSelect.disabled = true;
+
+    }
+
+    container.innerHTML = buildRouteView(route, state.centers);
+
+    if (!route) return;
+
+
+
+    if (qrSelect) qrSelect.disabled = false;
+
+    if (qrSelect) {
+
+      qrSelect.innerHTML = `<option value="">Selecciona QR del centro</option>`;
+
+      qrSelect.disabled = false;
+
+      route.stops.forEach((s) => {
+
+        const center = state.centers.find((c) => c.id === s.center_id);
+
+        const label = `${center ? center.name : s.center_id} / ${s.tank_id}`;
+
+        qrSelect.innerHTML += `<option value="${s.center_id}|${s.tank_id}">${label}</option>`;
+
+      });
+
+      qrSelect.onchange = async () => {
+
+        const value = qrSelect.value;
+
+        if (!value) return;
+
+        const [centerId, tankId] = value.split("|");
+
+        const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
+
+        if (currentStop.center_id !== centerId || currentStop.tank_id !== tankId) {
+
+          flash("Ese QR no corresponde al destino actual.");
+
+          qrSelect.value = "";
+
+          return;
+
+        }
+
+        const res = await postJSON("/api/routes/arrive", { route_id: route.id });
+
+        flash(res.ok ? "Llegada marcada por QR" : res.error || "Error");
+
+        qrSelect.value = "";
+
+        load();
+
+      };
+
+    }
+
+
+
+    const arriveBtn = document.getElementById("btn-arrive-stop");
+
+    arriveBtn?.addEventListener("click", async () => {
+
+      if (!session) {
+
+        flash("Inicia sesion para registrar llegada.");
+
+        window.openSessionModal?.("worker");
+
+        return;
+
+      }
+
+      const res = await postJSON("/api/routes/arrive", { route_id: route.id });
+
+      flash(res.ok ? "Llegada marcada" : res.error || "Error");
+
+      load();
+
+    });
+
+
+
+    const form = document.getElementById("complete-stop-form");
+
+    form?.addEventListener("submit", async (e) => {
+
+      e.preventDefault();
+
+      if (!session) {
+
+        flash("Inicia sesion para cerrar el destino.");
+
+        window.openSessionModal?.("worker");
+
+        return;
+
+      }
+
+      const body = { route_id: route.id, delivered_l: Number(form.delivered.value), note: form.note.value };
+
+      const res = await postJSON("/api/routes/complete-stop", body);
+
+      if (!res.ok) {
+
+        flash(res.error || "Error");
+
+        return;
+
+      }
+
+      flash("Destino finalizado");
+
+      if (res.route?.status === "regresando") {
+
+        saveSession("activeRouteId", res.route.id);
+
+        flash("Entrega exitosa. Marca llegada en almacen.");
+
+        setTimeout(() => (window.location.href = "/llegada"), 400);
+
+      } else {
+
+        load();
+
+      }
+
+    });
+
+
+
+    const ctaArrival = document.getElementById("cta-arrival");
+
+    ctaArrival?.addEventListener("click", async () => {
+
+      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success: true });
+
+      flash(res.ok ? "Ruta cerrada" : res.error || "Error");
+
+      if (res.ok) {
+
+        saveSession("activeRouteId", null);
+
+        setTimeout(() => (window.location.href = "/"), 800);
+
+      } else {
+
+        load();
+
+      }
+
+    });
+
+  }
+
+
+
+  load();
+
+  setInterval(load, 60000);
+
+}
+
+
+
+function buildArrivalView(route) {
+
+  if (!route) return `<div class="muted">No hay ruta en retorno. Finaliza un destino primero.</div>`;
+
+  if (route.status !== "regresando" && route.status !== "finalizada") {
+
+    return `<div class="muted">Aun hay destinos pendientes. Vuelve al paso de destino.</div>`;
+
+  }
+
+  if (route.status === "finalizada") {
+
+    return `<div class="chip">Ruta ${route.id} ya cerrada.</div>`;
+
+  }
+
+  return `
+
+    <div class="route-card">
+
+      <h4>${route.id} - ${route.truck_id}</h4>
+
+      <div class="tank-meta"><span>Litros totales</span><span>${formatLiters(route.total_delivered)}</span></div>
+
+      <div class="tank-meta"><span>Destinos</span><span>${route.stops.length}</span></div>
+
+    </div>
+
+    <form id="arrive-warehouse-form" class="stack">
+
+      <label>
+
+        Descarga exitosa
+
+        <select name="success">
+
+          <option value="true">Si</option>
+
+          <option value="false">No, incidencias</option>
+
+        </select>
+
+      </label>
+
+      <button class="btn" type="submit">Marcar llegada a almacen</button>
+
+    </form>
+
+  `;
+
+}
+
+
+
+async function initLlegada() {
+
+  refreshSessionBadges();
+
+  const container = document.getElementById("arrival-content");
+
+  const qrBtn = document.getElementById("qr-warehouse-btn");
+
+
+
+  async function load() {
+
+    const state = await fetchState();
+
+    const session = ensureWorkerSession();
+
+    const routeId = getSession("activeRouteId");
+
+    let route = state.routes.find((r) => r.id === routeId);
+
+    if (!route && session) route = state.routes.find((r) => r.worker === session.user);
+
+    container.innerHTML = buildArrivalView(route);
+
+    if (qrBtn) {
+
+      qrBtn.disabled = !route || route.status === "finalizada";
+
+    }
+
+    if (!route || route.status !== "regresando") return;
+
+    const form = document.getElementById("arrive-warehouse-form");
+
+    form?.addEventListener("submit", async (e) => {
+
+      e.preventDefault();
+
+      if (!session) {
+
+        flash("Inicia sesion para cerrar la ruta.");
+
+        window.openSessionModal?.("worker");
+
+        return;
+
+      }
+
+      const success = form.success.value === "true";
+
+      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success });
+
+      flash(res.ok ? "Ruta cerrada" : res.error || "Error");
+
+      if (res.ok) {
+
+        saveSession("activeRouteId", null);
+
+        setTimeout(() => (window.location.href = "/"), 800);
+
+      } else {
+
+        load();
+
+      }
+
+    });
+
+  }
+
+
+
+  async function handleWarehouseQR() {
+
+    const session = ensureWorkerSession();
+
+    if (!session) {
+
+      flash("Inicia sesion de operario para cerrar la ruta.");
+
+      window.openSessionModal?.("worker");
+
+      return;
+
+    }
+
+    const state = await fetchState();
+
+    const routeId = getSession("activeRouteId");
+
+    let route = state.routes.find((r) => r.id === routeId);
+
+    if (!route) route = state.routes.find((r) => r.worker === session.user);
+
+    if (!route) {
+
+      flash("No hay ruta activa para este operario.");
+
+      return;
+
+    }
+
+    if (route.status === "finalizada") {
+
+      flash("La ruta ya esta cerrada.");
+
+      return;
+
+    }
+
+    if (route.status !== "regresando") {
+
+      flash("La ruta aun no esta en regreso.");
+
+      return;
+
+    }
+
+    const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success: true });
+
+    if (!res.ok) {
+
+      flash(res.error || "Error");
+
+      return;
+
+    }
+
+    flash("Ruta cerrada via QR de almacen");
+
+    saveSession("activeRouteId", null);
+
+    load();
+
+    setTimeout(() => (window.location.href = "/"), 600);
+
+  }
+
+
+
+  qrBtn?.addEventListener("click", handleWarehouseQR);
+
+  load();
+
+  setInterval(load, 60000);
+
+}
+
+
+
+async function initWorkerLogin() {
+
+  const form = document.getElementById("worker-login-form");
+
+  form?.addEventListener("submit", async (e) => {
+
+    e.preventDefault();
+
+    const body = { username: form.username.value, password: form.password.value, role: "worker" };
+
+    const res = await postJSON("/api/login", body);
+
+    if (!res.ok) {
+
+      flash(res.error || "Credenciales invalidas");
+
+      return;
+
+    }
+
+    saveSession("workerSession", { user: body.username });
+
+    refreshSessionBadges();
+
+    flash("Sesion iniciada");
+
+    window.location.href = "/salida";
+
+  });
+
+}
+
+
+
+function ensureRouteDetailModal() {
+  if (document.getElementById("route-detail-modal")) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <div id="route-detail-modal" class="modal hidden">
+      <div class="modal-card route-detail-card">
+        <div class="row spaced">
+          <div>
+            <div class="caps">Ruta</div>
+            <h3 id="route-detail-title">Detalle</h3>
+          </div>
+          <button class="mini-btn" id="close-route-detail" type="button">Cerrar</button>
+        </div>
+        <div id="route-detail-body" class="route-detail-body"></div>
+      </div>
+    </div>
+  `;
+  const modalEl = wrapper.firstElementChild;
+  if (modalEl) document.body.appendChild(modalEl);
+  const modal = document.getElementById("route-detail-modal");
+  const closeModal = () => {
+    modal?.classList.add("hidden");
+    modal?.classList.remove("active");
+  };
+  document.getElementById("close-route-detail")?.addEventListener("click", closeModal);
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+}
+
+
+function openRouteDetail(route, state) {
+  ensureRouteDetailModal();
+  const modal = document.getElementById("route-detail-modal");
+  const title = document.getElementById("route-detail-title");
+  const body = document.getElementById("route-detail-body");
+  if (!modal || !title || !body) return;
+
+  const centers = state?.centers || [];
+  const stops = route.stops || [];
+  const started = route.started_at ? new Date(route.started_at) : null;
+  const finished = route.finished_at ? new Date(route.finished_at) : null;
+  const totalMinutes = started ? minutesBetween(started, finished || new Date()) : null;
+  const statusTone = route.status === "finalizada" ? "ok" : route.status === "en_destino" ? "warn" : "";
+  const product = route.product_type || route.stops?.[0]?.product;
+
+  const stopBlocks =
+    stops
+      .map((s, idx) => {
+        const center = centers.find((c) => c.id === s.center_id);
+        const tank = center?.tanks?.find((t) => t.id === s.tank_id);
+        const centerName = center?.name || s.center_id || "-";
+        const tankLabel = tank?.label || s.tank_id || "-";
+        const arrival = s.arrival_at ? new Date(s.arrival_at) : null;
+        const depart = s.depart_at ? new Date(s.depart_at) : null;
+        const duration = arrival ? minutesBetween(arrival, depart || new Date()) : null;
+        const liters = s.delivered_l ?? s.liters ?? 0;
+        const stopStatus = s.status === "completado" ? "Completado" : arrival ? "En destino" : "Pendiente";
+        const stopTone = s.status === "completado" ? "ok" : arrival ? "warn" : "";
+        const arrivalText = arrival
+          ? `${arrival.toLocaleDateString()} ${formatDatePlus1(arrival)}`
+          : "Llegada pendiente";
+        const departText = depart ? `${depart.toLocaleDateString()} ${formatDatePlus1(depart)}` : "";
+        return `
+          <div class="route-stop-card ${stopTone}">
+            <div class="row" style="flex-wrap:wrap;">
+              <strong>${idx + 1}. ${centerName}</strong>
+              <span class="chip soft">${tankLabel}</span>
+            </div>
+            <div class="small muted">${compactProduct(s.product || product || "-")} · ${formatLiters(liters)}</div>
+            <div class="small muted">${arrivalText}${departText ? " · " + departText : ""}</div>
+            <div class="row" style="flex-wrap:wrap;">
+              <span class="small">${duration ? `${duration} min en destino` : "Tiempo pendiente"}</span>
+              <span class="status ${stopTone || "warn"}">${stopStatus}</span>
+            </div>
+          </div>
+        `;
+      })
+      .join("") || `<div class="muted">Sin paradas</div>`;
+
+  title.textContent = `${route.id} · ${route.truck_id}${route.worker ? " · " + route.worker : ""}`;
+  body.innerHTML = `
+    <div class="row" style="flex-wrap:wrap; gap:6px;">
+      <span class="chip soft"><span class="status ${statusTone}">${routeStatusLabel[route.status] || route.status}</span></span>
+      <span class="chip soft">${formatLiters(route.total_delivered || 0)} entregado</span>
+      <span class="chip soft">${stops.length} destinos</span>
+    </div>
+    <div class="detail-row"><strong>Inicio</strong><span>${started ? `${started.toLocaleDateString()} ${formatDatePlus1(started)}` : "n/d"}</span></div>
+    <div class="detail-row"><strong>Fin</strong><span>${finished ? `${finished.toLocaleDateString()} ${formatDatePlus1(finished)}` : "En curso"}</span></div>
+    <div class="detail-row"><strong>Duracion</strong><span>${totalMinutes ? `${totalMinutes} min` : "En curso"}</span></div>
+    <div class="detail-row"><strong>Producto</strong><span>${compactProduct(product || "-")}</span></div>
+    <div class="detail-row"><strong>Origen</strong><span>${route.origin || "Almacen"}</span></div>
+    <div class="timeline-head">Destinos</div>
+    <div class="route-stop-grid">${stopBlocks}</div>
+  `;
+
+  modal.classList.remove("hidden");
+  modal.classList.add("active");
+}
+
+
+async function initAdmin() {
+
+  const loginPanel = document.getElementById("admin-login-panel");
+
+  const content = document.getElementById("admin-content");
+
+  const sessionLabel = document.getElementById("admin-session-label");
+
+  const adminSession = getSession("adminSession");
+
+
+
+  const renderStats = (state) => {
+
+    const statsBox = document.getElementById("admin-stats");
+    if (!statsBox) return;
+    const delivered = state.route_history.reduce((acc, r) => acc + (r.total_delivered || 0), 0);
+    statsBox.innerHTML = `
+      <div class="mini-card"><strong>Activas</strong>${state.routes.length}</div>
+      <div class="mini-card"><strong>Cerradas</strong>${state.route_history.length}</div>
+      <div class="mini-card"><strong>Litros</strong>${formatLiters(delivered)}</div>
+      <div class="mini-card"><strong>Alertas</strong>${state.alerts.length}</div>
+    `;
+
+  };
+
+
+
+  const renderAdminCenters = (state) => {
+
+    renderCenters(state.centers, "admin-center-grid", { skipFocus: true });
+
+    renderAlarms(state.alerts, "admin-alerts");
+
+  };
+
+
+
+  const renderRouteTable = (state) => {
+
+    const box = document.getElementById("admin-route-table");
+
+    if (!box) return;
+
+    const rows = [];
+
+    state.routes.forEach((r) => {
+
+      const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
+
+      const center = state.centers.find((c) => c.id === stop?.center_id);
+
+      const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
+
+      rows.push({
+
+        estado: routeStatusLabel[r.status] || r.status,
+
+        ruta: r.id,
+
+        camion: r.truck_id,
+
+        operario: r.worker,
+
+        destino: `${center ? center.name : stop?.center_id || "-"} - ${tank ? tank.label : stop?.tank_id || ""}`,
+
+        litros: formatLiters(r.total_delivered || 0),
+
+        hora: formatDatePlus1(stop?.arrival_at || r.started_at),
+
+        detalle: r,
+
+      });
+
+    });
+
+    state.route_history.slice(0, 12).forEach((r) => {
+
+      const lastStop = r.stops?.[r.stops.length - 1];
+
+      rows.push({
+
+        estado: "Finalizada",
+
+        ruta: r.id,
+
+        camion: r.truck_id,
+
+        operario: r.worker,
+
+        destino: `${lastStop?.center_id || "-"} - ${lastStop?.tank_id || ""}`,
+
+        litros: formatLiters(r.total_delivered || 0),
+
+        hora: formatDatePlus1(r.finished_at),
+
+        detalle: r,
+
+      });
+
+    });
+
+    box.innerHTML = `
+
+      <div class="excel-row head">
+
+        <div class="excel-cell">Estado</div>
+
+        <div class="excel-cell">Ruta</div>
+
+        <div class="excel-cell">Camion</div>
+
+        <div class="excel-cell">Operario</div>
+
+        <div class="excel-cell">Destino</div>
+
+        <div class="excel-cell">Litros</div>
+
+        <div class="excel-cell">Hora</div>
+
+        <div class="excel-cell">Detalle</div>
+
+      </div>
+
+      ${rows
+
+        .map(
+
+          (r) => `
+
+            <div class="excel-row">
+
+              <div class="excel-cell">${r.estado}</div>
+
+              <div class="excel-cell">${r.ruta}</div>
+
+              <div class="excel-cell">${r.camion}</div>
+
+              <div class="excel-cell">${r.operario}</div>
+
+              <div class="excel-cell">${r.destino}</div>
+
+              <div class="excel-cell">${r.litros}</div>
+
+              <div class="excel-cell">${r.hora}</div>
+
+              <div class="excel-cell"><button class="mini-btn" data-route="${r.detalle.id}">Ver mas</button></div>
+
+            </div>
+
+          `
+
+        )
+
+        .join("")}
+
+    `;
+
+    box.querySelectorAll("button[data-route]").forEach((btn) => {
+      btn.onclick = () => {
+        const id = btn.getAttribute("data-route");
+        const route = rows.find((r) => r.detalle.id === id)?.detalle;
+        if (!route) return;
+        openRouteDetail(route, state);
+      };
+    });
+  };
+
+
+
+  const renderCharts = () => {};
+
+
+
+  const load = async () => {
+
+    const state = await fetchState();
+
+    renderStats(state);
+
+    renderAdminCenters(state);
+
+    renderRouteTable(state);
+
+    renderCharts(state);
+
+  };
+
+
+
+  if (adminSession) {
+
+    loginPanel?.classList.add("hidden");
+
+    content?.classList.remove("hidden");
+
+    if (sessionLabel) sessionLabel.textContent = `Sesion: ${adminSession.user}`;
+
+    load();
+
+    setInterval(load, 60000);
+
+  }
+
+
+
+  const form = document.getElementById("admin-login-form");
+
+  form?.addEventListener("submit", async (e) => {
+
+    e.preventDefault();
+
+    const body = { username: form.username.value, password: form.password.value, role: "admin" };
+
+    const res = await postJSON("/api/login", body);
+
+    if (!res.ok) {
+
+      flash(res.error || "Credenciales invalidas");
+
+      return;
+
+    }
+
+    saveSession("adminSession", { user: body.username });
+
+    refreshSessionBadges();
+
+    loginPanel?.classList.add("hidden");
+
+    content?.classList.remove("hidden");
+
+    if (sessionLabel) sessionLabel.textContent = `Sesion: ${body.username}`;
+
+    flash("Sesion admin iniciada");
+
+    load();
+
+    setInterval(load, 60000);
+
+  });
+
+}
+
+
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  ensureSessionModal();
+
+  refreshSessionBadges();
+
+  const page = document.body.dataset.page;
+
+  if (page === "home") initHome();
+
+  if (page === "worker-login") initWorkerLogin();
+
+  if (page === "salida") initSalida();
+
+  if (page === "destino") initDestino();
+
+  if (page === "llegada") initLlegada();
+
+  if (page === "admin") initAdmin();
+
+  if (page === "center") initCenterPage();
+
+});
+
+
+
+
+
+
+
+
+
+
+
+
+

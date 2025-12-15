@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acceso trabajador - Arbolani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="worker-login">
+    <main class="layout narrow">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Paso 0</div>
+            <h2>Iniciar sesi&oacute;n</h2>
+            <p class="muted">Accede antes de usar los QR.</p>
+          </div>
+        </div>
+        <form id="worker-login-form" class="stack form-grid">
+          <label>
+            Usuario
+            <input name="username" placeholder="prueba1" required />
+          </label>
+          <label>
+            Contrase&ntilde;a
+            <input type="password" name="password" placeholder="123" required />
+          </label>
+          <button class="btn" type="submit">Entrar</button>
+          <p class="muted small">Perfiles: prueba1/2/3 con 123</p>
+        </form>
+        <div class="footer-note">Tras acceder ser&aacute;s enviado a la p&aacute;gina de salida.</div>
+      </div>
+
+      <div class="row spaced" style="margin-top:12px;">
+        <a class="mini-btn" href="/">Volver a inicio</a>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
