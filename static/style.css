@@ -977,6 +977,59 @@ img {
   border: 1px solid var(--border);
   background: #fff;
 }
+.qr-label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+}
+.qr-label .mini-select {
+  width: 100%;
+}
+.refill-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.refill-card {
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #fff;
+  box-shadow: 0 10px 20px rgba(15, 23, 42, 0.05);
+}
+.refill-card.bad {
+  background: linear-gradient(135deg, rgba(232, 86, 86, 0.08), #fff);
+}
+.refill-card.neutral {
+  background: linear-gradient(135deg, rgba(42, 125, 225, 0.06), #fff);
+}
+.refill-level {
+  margin: 8px 0;
+  height: 8px;
+  border-radius: 999px;
+  background: #eef2f8;
+  overflow: hidden;
+}
+.refill-level .level-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #e85656, #f3b23a);
+  border-radius: inherit;
+}
+.mini-tag {
+  display: inline-flex;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: #eef2f8;
+  color: var(--text);
+  font-size: 11px;
+  margin-right: 6px;
+  margin-top: 4px;
+}
+.mini-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
 
 label {
   display: grid;

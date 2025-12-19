@@ -30,6 +30,8 @@ const statusColor = {
 
   warn: "#ffc857",
 
+  alert: "#ff9f66",
+
   critical: "#ff7b7b",
 
 };
@@ -37,6 +39,8 @@ const statusColor = {
 
 
 const severityRank = {
+
+  alert: 3,
 
   critical: 2,
 
@@ -176,6 +180,21 @@ function formatDatePlus1(ts) {
 
 }
 
+function formatEta(ts) {
+  if (!ts) return "n/d";
+  const d = new Date(ts);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function formatHoursLeft(hours) {
+  if (hours === null || hours === undefined) return "";
+  if (hours >= 24) {
+    const days = hours / 24;
+    return `${Number.isInteger(days) ? days : days.toFixed(1)} d`;
+  }
+  return `${Math.round(hours)} h`;
+}
+
 
 
 function minutesBetween(start, end) {
@@ -294,6 +313,96 @@ function getSession(key) {
 
   }
 
+}
+
+
+function renderWorkerAssignments(state) {
+  const box = document.getElementById("worker-assignment");
+  if (!box) return;
+  const session = ensureWorkerSession();
+  box.innerHTML = "";
+  if (!session) {
+    box.innerHTML = `<div class="muted">Inicia sesion de operario.</div>`;
+    return;
+  }
+
+  const assigned = (state.routes || []).find((r) => r.worker === session.user);
+  if (!assigned) {
+    box.innerHTML = `<div class="muted">Sin rutas asignadas hoy.</div>`;
+    return;
+  }
+
+  const liters = (assigned.stops || []).reduce((acc, s) => acc + (s.liters || 0), 0);
+  const centerNames = (assigned.stops || []).map((s) => {
+    const c = state.centers?.find((cc) => cc.id === s.center_id);
+    return c ? c.name : s.center_id;
+  });
+  const centerSummary =
+    centerNames.slice(0, 2).join(", ") + (centerNames.length > 2 ? ` + ${centerNames.length - 2} mas` : "");
+  const card = document.createElement("div");
+  card.className = "route-card emphasis";
+  const status = routeStatusLabel[assigned.status] || assigned.status;
+  card.innerHTML = `
+    <div class="row spaced">
+      <div>
+        <strong>${assigned.truck_id} · ${assigned.id}</strong>
+        <div class="muted small">${centerSummary}</div>
+      </div>
+      <span class="status ${assigned.status === "planificada" ? "warn" : "ok"}">${status}</span>
+    </div>
+    <div class="tank-meta">
+      <span>Litros plan: ${formatLiters(liters)}</span>
+      <span>${assigned.stops?.length || 0} paradas</span>
+    </div>
+    <div class="mini-row">
+      ${(assigned.stops || [])
+        .map((s) => {
+          const c = state.centers?.find((cc) => cc.id === s.center_id);
+          const centerName = c ? c.name : s.center_id;
+          const tankLabel = c?.tanks?.find((t) => t.id === s.tank_id)?.label || s.tank_id;
+          return `<span class="mini-tag">${centerName} · ${tankLabel}</span>`;
+        })
+        .join("")}
+    </div>
+    ${
+      assigned.status === "planificada"
+        ? `<label class="small qr-label">
+            Escanea el QR del camion ${assigned.truck_id} para arrancar la ruta
+            <select class="mini-select claim-qr">
+              <option value="">Selecciona QR</option>
+              <option value="${assigned.truck_id}">${assigned.truck_id}</option>
+              ${state.trucks
+                .filter((t) => t.id !== assigned.truck_id)
+                .map((t) => `<option value="${t.id}">${t.id}</option>`)
+                .join("")}
+            </select>
+          </label>
+          <button class="btn" type="button" data-claim="${assigned.truck_id}">Activar ruta</button>
+          <div class="muted tiny">Tras activarla, ve al paso 2 y marca llegada al primer centro.</div>`
+        : `<div class="muted small">Ruta en curso. Ve al paso 2.</div>`
+    }
+  `;
+  box.appendChild(card);
+  const claimBtn = card.querySelector("button[data-claim]");
+  claimBtn?.addEventListener("click", async () => {
+    const scanned = card.querySelector(".claim-qr")?.value;
+    if (!scanned) {
+      flash("Escanea o selecciona el QR del camion.");
+      return;
+    }
+    if (scanned !== assigned.truck_id) {
+      flash("Ese QR no corresponde a este camion.");
+      return;
+    }
+    const res = await postJSON("/api/routes/claim", { worker: session.user, truck_id: assigned.truck_id });
+    if (!res.ok) {
+      flash(res.error || "No se pudo activar la ruta");
+      return;
+    }
+    saveSession("activeRouteId", res.route?.id || null);
+    flash("Ruta activada. Ve al paso 2 para comenzar.");
+    window.location.href = "/destino";
+  });
 }
 
 
@@ -775,7 +884,9 @@ function renderCenters(centers, targetId = "center-grid", options = {}) {
     card.innerHTML = `
       <div class="micro-head">
         <span class="name">${c.name}</span>
-        <span class="pill tiny ${worst}">${worst === "critical" ? "ALTA" : worst === "warn" ? "PRE" : "OK"}</span>
+        <span class="pill tiny ${worst}">${
+          worst === "critical" ? "ALTA" : worst === "alert" ? "ALERTA" : worst === "warn" ? "PRE" : "OK"
+        }</span>
       </div>
       <div class="nano-row">
         ${mini
@@ -820,7 +931,8 @@ function renderCenterDetail(center, opts = {}) {
   if (title) title.textContent = center.name;
   const worst = worstStatus(center.tanks || []);
   if (badge) {
-    const label = worst === "critical" ? "Alerta" : worst === "warn" ? "Precaucion" : "Ok";
+    const label =
+      worst === "critical" ? "Alerta" : worst === "alert" ? "Alerta 20%" : worst === "warn" ? "Precaucion" : "Ok";
     badge.textContent = label;
     badge.className = `chip soft severity-${worst}`;
   }
@@ -829,6 +941,8 @@ function renderCenterDetail(center, opts = {}) {
     const pct = Math.max(0, Math.min(t.percentage || 0, 100));
     const fillPct = Math.max(6, pct);
     const color = statusColor[t.status] || statusColor.ok;
+    const etaText = formatEta(t.runout_eta);
+    const etaShort = formatHoursLeft(t.runout_hours);
     const card = document.createElement("div");
     card.className = "focus-tank";
     card.innerHTML = `
@@ -838,7 +952,8 @@ function renderCenterDetail(center, opts = {}) {
       </div>
       <div class="focus-meta">
         <div class="focus-line">${pct}% - ${compactProduct(t.product)}</div>
-        <div class="muted small">${formatLiters(t.capacity_l)}</div>
+        <div class="muted small">${formatLiters(t.capacity_l)} • Falta ${formatLiters(t.deficit_l || 0)}</div>
+        <div class="muted small">Reponer: ${etaText}${etaShort ? " (" + etaShort + ")" : ""}</div>
       </div>
     `;
     panel.appendChild(card);
@@ -1110,6 +1225,11 @@ function renderAlarms(alerts, targetId = "alarms-panel") {
         </div>
 
         <div class="alert-mini">${a.tank_id} - ${a.message}</div>
+        ${
+          a.runout_eta
+            ? `<div class="muted tiny">ETA: ${formatEta(a.runout_eta)}</div>`
+            : ""
+        }
 
       `;
 
@@ -1234,6 +1354,143 @@ function renderActiveRoutes(routes, centers) {
 
 });
 
+}
+
+function renderRefillTable(state) {
+  const box = document.getElementById("admin-refill-table");
+  if (!box) return;
+  const tanks = (state.tanks || [])
+    .filter((t) => (t.percentage || 0) < 20)
+    .sort((a, b) => (a.percentage || 0) - (b.percentage || 0));
+  if (!tanks.length) {
+    box.innerHTML = `<div class="muted small">Todo por encima del 20%.</div>`;
+    return;
+  }
+  const cards = tanks.slice(0, 60);
+  box.innerHTML = `<div class="refill-grid">${cards
+    .map((t) => {
+      const eta = t.runout_eta ? formatEta(t.runout_eta) : "n/d";
+      const tone = t.status === "critical" || t.status === "alert" ? "bad" : "warn";
+      return `
+        <div class="refill-card ${tone}">
+          <div class="row spaced">
+            <div>
+              <div class="muted tiny">${t.center_name || t.center_id}</div>
+              <strong>${t.label}</strong>
+            </div>
+            <span class="pill tiny">${t.percentage}%</span>
+          </div>
+          <div class="refill-level"><div class="level-bar" style="width:${Math.max(4, t.percentage)}%"></div></div>
+          <div class="muted small">Faltan ${formatLiters(t.deficit_l || 0)}</div>
+          <div class="muted tiny">ETA ${eta}${t.runout_hours ? " (" + formatHoursLeft(t.runout_hours) + ")" : ""}</div>
+        </div>
+      `;
+    })
+    .join("")}</div>`;
+}
+
+function renderUrgentPlanner(state) {
+  const centerBox = document.getElementById("urgent-center-list");
+  const truckBox = document.getElementById("urgent-truck-list");
+  const btn = document.getElementById("btn-generate-urgent");
+  if (!centerBox || !truckBox) return;
+  const urgent = state.urgent_centers || [];
+  const availableTrucks = (state.trucks || []).filter((t) => t.status === "parked" && !t.route_id);
+  if (!urgent.length) {
+    centerBox.innerHTML = `<div class="muted small">Sin dep&oacute;sitos al 20% o menos.</div>`;
+  } else {
+    const sortedCenters = urgent
+      .map((c) => {
+        const minPct = Math.min(...c.tanks.map((t) => t.percentage));
+        return { ...c, minPct };
+      })
+      .sort((a, b) => a.minPct - b.minPct);
+    centerBox.innerHTML = `<div class="refill-grid">${sortedCenters
+      .map((c) => {
+        const etaMs = c.tanks
+          .map((t) => (t.runout_eta ? new Date(t.runout_eta).getTime() : Number.MAX_SAFE_INTEGER))
+          .sort((a, b) => a - b)[0];
+        const eta = etaMs && Number.isFinite(etaMs) ? new Date(etaMs) : null;
+        const topTanks = c.tanks.slice().sort((a, b) => a.percentage - b.percentage).slice(0, 2);
+        return `
+          <div class="refill-card bad">
+            <div class="row spaced">
+              <div>
+                <div class="muted tiny">${c.center_name}</div>
+                <strong>${topTanks[0]?.percentage || "-"}% min</strong>
+              </div>
+              <span class="pill tiny">${c.tanks.length} deps</span>
+            </div>
+            <div class="muted small">Litros urgentes: ${formatLiters(c.total_deficit)}</div>
+            <div class="muted tiny">ETA ${eta ? formatEta(eta) : "n/d"}</div>
+            <div class="mini-row">
+              ${topTanks
+                .map(
+                  (t) =>
+                    `<span class="mini-tag">${t.label}: ${t.percentage}%</span>`
+                )
+                .join("")}
+            </div>
+          </div>
+        `;
+      })
+      .join("")}</div>`;
+  }
+  if (!availableTrucks.length) {
+    truckBox.innerHTML = `<div class="muted small">Sin camiones libres.</div>`;
+  } else {
+    truckBox.innerHTML = `<div class="refill-grid">${availableTrucks
+      .map(
+        (t) => `
+        <div class="refill-card neutral">
+          <div class="row spaced">
+            <strong>${t.id}</strong>
+            <span class="pill tiny">${formatLiters(t.capacity_l)}</span>
+          </div>
+          <div class="muted small">${t.driver || "-"}</div>
+          <div class="muted tiny">${t.notes || ""}</div>
+        </div>
+      `
+      )
+      .join("")}</div>`;
+  }
+  if (btn) btn.disabled = !urgent.length || !availableTrucks.length;
+}
+
+function renderUrgentPreview(state) {
+  const box = document.getElementById("urgent-plan-preview");
+  if (!box) return;
+  const planned = (state.routes || []).filter((r) => r.auto_generated);
+  if (!planned.length) {
+    box.innerHTML = `<div class="muted small">Sin rutas urgentes planificadas.</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="refill-grid">${planned
+    .map((r) => {
+      const status = routeStatusLabel[r.status] || r.status;
+      const stopList =
+        r.stops
+          ?.map((s) => {
+            const c = state.centers?.find((cc) => cc.id === s.center_id);
+            const centerName = c ? c.name : s.center_id;
+            const tankLabel = c?.tanks?.find((t) => t.id === s.tank_id)?.label || s.tank_id;
+            return `${centerName} · ${tankLabel} (${formatLiters(s.liters)})`;
+          })
+          .join("<br>") || "";
+      return `
+        <div class="refill-card neutral">
+          <div class="row spaced">
+            <strong>${r.id} · ${r.truck_id}</strong>
+            <span class="pill tiny">${status}</span>
+          </div>
+          <div class="muted small">Destinos: ${r.stops?.length || 0}</div>
+          <div class="muted small">Carga: ${formatLiters(r.planned_load_l || r.total_delivered || 0)}</div>
+          <div class="muted tiny">Operario: ${r.worker || "Pendiente"}</div>
+          ${stopList ? `<div class="muted tiny" style="margin-top:6px; line-height:1.4;">${stopList}</div>` : ""}
+        </div>
+      `;
+    })
+    .join("")}</div>`;
 }
 
 function renderWorkerRoutes(state) {
@@ -1764,8 +2021,8 @@ async function loadHome() {
       renderMap(cached, "map-admin");
       renderWorkerFlow(cached);
     } else {
+      renderWorkerAssignments(cached);
       renderWorkerRoutes(cached);
-      renderMap(cached, "map-worker");
       updateStepPills(cached);
     }
   }
@@ -1781,8 +2038,8 @@ async function loadHome() {
     renderMap(state, "map-admin");
     renderWorkerFlow(state);
   } else {
+    renderWorkerAssignments(state);
     renderWorkerRoutes(state);
-    renderMap(state, "map-worker");
     updateStepPills(state);
   }
 }
@@ -2964,12 +3221,38 @@ async function initAdmin() {
 
     renderStats(state);
 
+    renderRefillTable(state);
+
+    renderUrgentPlanner(state);
+
+    renderUrgentPreview(state);
+
     renderAdminCenters(state);
 
     renderRouteTable(state);
 
     renderCharts(state);
 
+  };
+
+
+  const bindUrgentButton = () => {
+    const btn = document.getElementById("btn-generate-urgent");
+    if (!btn) return;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Generando...";
+      const res = await postJSON("/api/admin/auto-plan", {});
+      if (!res.ok) {
+        flash(res.error || "No se pudo generar rutas urgentes");
+      } else {
+        flash(`Rutas generadas: ${res.created}`);
+      }
+      btn.textContent = original || "Generar ruta";
+      btn.disabled = false;
+      load();
+    };
   };
 
 
@@ -2988,7 +3271,7 @@ async function initAdmin() {
 
   }
 
-
+  bindUrgentButton();
 
   const form = document.getElementById("admin-login-form");
 
@@ -3053,16 +3336,3 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "center") initCenterPage();
 
 });
-
-
-
-
-
-
-
-
-
-
-
-
-

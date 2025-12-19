@@ -381,16 +381,60 @@ def _flatten_tanks():
 
 def _compute_tank_status(tank):
     pct = tank["current_l"] / tank["capacity_l"] if tank["capacity_l"] else 0
-    if pct <= tank["crit_at"]:
-        status = "critical"
+    urgent_threshold = 0.2
+    status = "ok"
+    hours_left = None
+    runout_eta = None
+
+    if pct <= urgent_threshold:
+        status = "alert"
+        hours_left = 48
+        runout_eta = _now() + timedelta(hours=hours_left)
     elif pct <= tank["warn_at"]:
         status = "warn"
-    else:
-        status = "ok"
-    hourly_use = tank["capacity_l"] * 0.018
-    hours_left = (tank["current_l"] / hourly_use) if hourly_use else None
-    runout_eta = (_now() + timedelta(hours=hours_left)) if hours_left else None
-    return pct, status, runout_eta
+
+    if hours_left is None:
+        hourly_use = tank["capacity_l"] * 0.018
+        hours_left = (tank["current_l"] / hourly_use) if hourly_use else None
+        runout_eta = (_now() + timedelta(hours=hours_left)) if hours_left else None
+
+    return pct, status, runout_eta, hours_left
+
+
+def _tank_deficit(tank: Dict) -> int:
+    return max(tank.get("capacity_l", 0) - tank.get("current_l", 0), 0)
+
+
+def _collect_urgent_centers():
+    urgent = []
+    for center in centers:
+        urgent_tanks = []
+        for tank in center["tanks"]:
+            pct, status, runout_eta, hours_left = _compute_tank_status(tank)
+            if pct <= 0.2:
+                urgent_tanks.append(
+                    {
+                        "id": tank["id"],
+                        "label": tank["label"],
+                        "product": tank["product"],
+                        "percentage": round(pct * 100, 1),
+                        "deficit_l": _tank_deficit(tank),
+                        "runout_eta": runout_eta.isoformat() if runout_eta else None,
+                        "hours_left": hours_left,
+                    }
+                )
+        if urgent_tanks:
+            total_deficit = sum(t["deficit_l"] for t in urgent_tanks)
+            urgent.append(
+                {
+                    "center_id": center["id"],
+                    "center_name": center["name"],
+                    "location": center["location"],
+                    "tanks": urgent_tanks,
+                    "total_deficit": total_deficit,
+                }
+            )
+    return urgent
 
 
 def _jitter(value: float, delta: float, min_v: float, max_v: float):
@@ -480,6 +524,115 @@ def _update_truck_positions():
                 tr["notes"] = "Marca llegada a almacen"
 
 
+def _order_centers_by_distance(center_batch: List[Dict], origin: Dict):
+    ordered = []
+    remaining = list(center_batch)
+    current = origin
+    while remaining:
+        nearest = min(remaining, key=lambda c: _haversine_km(current, c["location"]))
+        ordered.append(nearest)
+        remaining.remove(nearest)
+        current = nearest["location"]
+    return ordered
+
+
+def _build_auto_route_for_truck(truck: Dict, center_batch: List[Dict], worker: Optional[str] = None):
+    if not center_batch:
+        return None
+    ordered_centers = _order_centers_by_distance(center_batch, WAREHOUSE)
+    stops = []
+    remaining_capacity = truck.get("capacity_l", 0)
+
+    for center in ordered_centers:
+        if remaining_capacity <= 0:
+            break
+        for tank in center["tanks"]:
+            if remaining_capacity <= 0:
+                break
+            liters = min(tank["deficit_l"], remaining_capacity)
+            if liters <= 0:
+                continue
+            stops.append(
+                {
+                    "center_id": center["center_id"],
+                    "tank_id": tank["id"],
+                    "liters": liters,
+                    "product": tank["product"],
+                    "status": "pendiente",
+                    "arrival_at": None,
+                    "depart_at": None,
+                    "delivered_l": None,
+                }
+            )
+            remaining_capacity -= liters
+
+    if not stops:
+        return None
+
+    planned_load = sum(s["liters"] for s in stops)
+    route = {
+        "id": _new_route_id(),
+        "worker": worker,
+        "truck_id": truck["id"],
+        "origin": WAREHOUSE["name"],
+        "product_type": "Multiproducto",
+        "stops": stops,
+        "status": "planificada",
+        "current_stop_idx": 0,
+        "started_at": None,
+        "finished_at": None,
+        "history": [
+            {
+                "event": "planificada",
+                "note": f"{len(stops)} destinos urgentes"
+                + (f" asignada a {worker}" if worker else ""),
+                "ts": _now(),
+            }
+        ],
+        "current_leg": None,
+        "total_delivered": 0,
+        "success": None,
+        "auto_generated": True,
+        "pending_worker": not bool(worker),
+        "planned_load_l": planned_load,
+    }
+    return route
+
+
+def _auto_plan_urgent_routes():
+    urgent = sorted(_collect_urgent_centers(), key=lambda c: c["total_deficit"], reverse=True)
+    available_trucks = [
+        t for t in trucks if t["status"] == "parked" and not t.get("route_id") and t.get("capacity_l")
+    ]
+    if not urgent or not available_trucks:
+        return []
+
+    worker_pool = list(WORKERS.keys())
+    random.shuffle(worker_pool)
+
+    assignments = {t["id"]: [] for t in available_trucks}
+    for idx, center in enumerate(urgent):
+        truck = available_trucks[idx % len(available_trucks)]
+        assignments[truck["id"]].append(center)
+
+    planned_routes = []
+    for idx, tr in enumerate(available_trucks):
+        center_batch = assignments.get(tr["id"], [])
+        worker = worker_pool[idx % len(worker_pool)] if worker_pool else None
+        route = _build_auto_route_for_truck(tr, center_batch, worker)
+        if not route:
+            continue
+        tr["route_id"] = route["id"]
+        tr["notes"] = f"Ruta urgente asignada a {worker}" if worker else "Ruta urgente planificada"
+        tr["current_load_l"] = route.get("planned_load_l", 0)
+        tr["destination"] = None
+        tr["started_at"] = None
+        tr["eta_minutes"] = None
+        planned_routes.append(route)
+        active_routes.append(route)
+    return planned_routes
+
+
 def _serialize_routes(routes: List[Dict]):
     serialized = []
     for r in routes:
@@ -491,6 +644,9 @@ def _serialize_routes(routes: List[Dict]):
                 "total_delivered": r.get("total_delivered", 0),
                 "product_type": r.get("product_type"),
                 "current_stop_idx": r.get("current_stop_idx", 0),
+                "pending_worker": r.get("pending_worker", False),
+                "auto_generated": r.get("auto_generated", False),
+                "planned_load_l": r.get("planned_load_l"),
                 "stops": [
                     {
                         **{k: stop.get(k) for k in ["center_id", "tank_id", "liters", "product", "status"]},
@@ -527,33 +683,43 @@ def _serialize_state():
     _simulate_sensors()
 
     serialized_centers = []
+    flat_tanks = []
     alerts = []
     for c in centers:
         serialized_tanks = []
         for t in c["tanks"]:
-            pct, status, runout = _compute_tank_status(t)
-            serialized_tanks.append(
-                {
-                    "id": t["id"],
-                    "label": t["label"],
-                    "product": t["product"],
-                    "capacity_l": t["capacity_l"],
-                    "current_l": t["current_l"],
-                    "percentage": round(pct * 100, 1),
-                    "status": status,
-                    "runout_eta": runout.isoformat() if runout else None,
-                    "sensors": t["sensors"],
-                    "location": t["location"],
-                    "center_id": c["id"],
-                }
-            )
-            if status in ("warn", "critical"):
+            pct, status, runout, hours_left = _compute_tank_status(t)
+            deficit_l = _tank_deficit(t)
+            tank_entry = {
+                "id": t["id"],
+                "label": t["label"],
+                "product": t["product"],
+                "capacity_l": t["capacity_l"],
+                "current_l": t["current_l"],
+                "percentage": round(pct * 100, 1),
+                "status": status,
+                "runout_eta": runout.isoformat() if runout else None,
+                "runout_hours": hours_left,
+                "deficit_l": deficit_l,
+                "needs_refill": status in ("warn", "critical", "alert"),
+                "sensors": t["sensors"],
+                "location": t["location"],
+                "center_id": c["id"],
+                "center_name": c["name"],
+            }
+            serialized_tanks.append(tank_entry)
+            flat_tanks.append(tank_entry)
+            if status in ("warn", "critical", "alert"):
+                eta_text = ""
+                if runout:
+                    eta_text = f" Reponer antes de {runout.strftime('%d/%m %H:%M')}."
                 alerts.append(
                     {
                         "tank_id": t["id"],
                         "center": c["name"],
-                        "severity": "alta" if status == "critical" else "media",
-                        "message": f"{c['name']} / {t['label']} bajo en nivel ({round(pct*100,1)}%).",
+                        "severity": "alta" if status in ("critical", "alert") else "media",
+                        "message": f"{c['name']} / {t['label']} bajo en nivel ({round(pct*100,1)}%).{eta_text}",
+                        "runout_eta": runout.isoformat() if runout else None,
                     }
                 )
         avg_ph = round(sum(t["sensors"]["ph"] for t in c["tanks"]) / len(c["tanks"]), 2)
@@ -602,13 +768,14 @@ def _serialize_state():
     return {
         "warehouse": WAREHOUSE,
         "centers": serialized_centers,
-        "tanks": _flatten_tanks(),
+        "tanks": flat_tanks,
         "trucks": serialized_trucks,
         "alerts": alerts,
         "routes": _serialize_routes(active_routes),
         "route_history": _serialize_routes(route_history[:8]),
         "delivery_log": log,
         "server_time": _now().isoformat(),
+        "urgent_centers": _collect_urgent_centers(),
     }
 
 
@@ -672,6 +839,64 @@ def api_login():
 def api_simulate_drain():
     _simulate_drain()
     return jsonify({"ok": True, "message": "Consumo simulado"}), 200
+
+
+@app.route("/api/admin/auto-plan", methods=["POST"])
+def api_admin_auto_plan():
+    planned = _auto_plan_urgent_routes()
+    if not planned:
+        return jsonify({"ok": False, "error": "Sin centros urgentes o camiones libres"}), 400
+    return jsonify({"ok": True, "created": len(planned), "routes": _serialize_routes(planned)})
+
+
+@app.route("/api/routes/claim", methods=["POST"])
+def api_claim_route():
+    payload = request.get_json(force=True)
+    worker = payload.get("worker")
+    truck_id = payload.get("truck_id")
+    if worker not in WORKERS:
+        return jsonify({"ok": False, "error": "Trabajador no valido"}), 400
+
+    truck = next((t for t in trucks if t["id"] == truck_id), None)
+    if not truck:
+        return jsonify({"ok": False, "error": "Camion no encontrado"}), 400
+
+    route = next(
+        (r for r in active_routes if r["truck_id"] == truck_id and r.get("status") == "planificada"),
+        None,
+    )
+    if not route:
+        return jsonify({"ok": False, "error": "No hay ruta planificada para este camion"}), 400
+    if route.get("worker") and route.get("worker") != worker:
+        return jsonify({"ok": False, "error": "Ruta asignada a otro operario"}), 400
+
+    route["worker"] = worker
+    route["pending_worker"] = False
+    route["status"] = "en_ruta"
+    route["started_at"] = _now()
+    route["history"].append({"event": "asignada", "note": f"Tomada por {worker}", "ts": _now()})
+
+    planned_load = route.get("planned_load_l") or sum(s["liters"] for s in route["stops"])
+    truck["status"] = "outbound"
+    truck["route_id"] = route["id"]
+    truck["notes"] = f"Asignada a {worker}"
+    truck["current_load_l"] = planned_load
+
+    first_stop = route["stops"][0]
+    dest_center = _find_center(first_stop["center_id"])
+    dest_tank = _find_tank(first_stop["center_id"], first_stop["tank_id"])
+    leg_origin = {**WAREHOUSE, "name": route.get("origin") or WAREHOUSE["name"]}
+    leg_dest = {
+        "lat": dest_tank["location"]["lat"],
+        "lon": dest_tank["location"]["lon"],
+        "name": f"{dest_center['name']} / {dest_tank['label']}"
+        if dest_center and dest_tank
+        else first_stop["center_id"],
+        "center_id": dest_center["id"] if dest_center else first_stop["center_id"],
+        "tank_id": dest_tank["id"] if dest_tank else first_stop["tank_id"],
+    }
+    _set_leg(route, truck, leg_origin, leg_dest, f"Hacia {dest_center['name']}" if dest_center else "Primer destino")
+    return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
 
 
 @app.route("/api/routes/plan", methods=["POST"])
@@ -925,4 +1150,4 @@ def api_arrive_warehouse():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5009)

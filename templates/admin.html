@@ -49,6 +49,45 @@
         <div class="panel sub-panel flush">
           <div class="panel-head">
             <div>
+              <div class="caps">ETAs de relleno</div>
+              <p class="muted small">Dep&oacute;sitos ordenados por proximidad de agotamiento.</p>
+            </div>
+          </div>
+          <div id="admin-refill-table" class="excel-board"></div>
+        </div>
+
+        <div class="panel sub-panel flush">
+          <div class="panel-head">
+            <div>
+              <div class="caps">Planeo urgente</div>
+              <p class="muted small">Dep&oacute;sitos &lt;=20% para repartir hoy.</p>
+            </div>
+            <button class="mini-btn" type="button" id="btn-generate-urgent">Generar ruta</button>
+          </div>
+          <div class="split" id="urgent-planner">
+            <div class="mini-panel">
+              <div class="caps">Centros en alerta</div>
+              <div id="urgent-center-list" class="excel-board"></div>
+            </div>
+            <div class="mini-panel">
+              <div class="caps">Camiones disponibles</div>
+              <div id="urgent-truck-list" class="excel-board"></div>
+            </div>
+          </div>
+          <div class="panel sub-panel flush">
+            <div class="panel-head">
+              <div>
+                <div class="caps">Asignaciones previstas</div>
+                <p class="muted small">Rutas urgentes pendientes de operario.</p>
+              </div>
+            </div>
+            <div id="urgent-plan-preview" class="excel-board"></div>
+          </div>
+        </div>
+
+        <div class="panel sub-panel flush">
+          <div class="panel-head">
+            <div>
               <div class="caps">Centros ordenados</div>
             </div>
           </div>
