@@ -3,7 +3,9 @@ import random
 from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-
+import os
+from pathlib import Path
+import qrcode
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
@@ -258,6 +260,44 @@ route_history: List[Dict] = []
 delivery_log: List[Dict] = []
 
 
+def _get_base_url() -> str:
+    return (
+        os.environ.get("APP_BASE_URL")
+        or os.environ.get("RENDER_EXTERNAL_URL")
+        or "http://localhost:5009"
+    ).rstrip("/")
+
+
+def _qr_targets(base_url: str):
+    targets = []
+    for tr in trucks:
+        targets.append(
+            {
+                "filename": f"truck_{tr['id']}.png",
+                "url": f"{base_url}/scan?type=truck&id={tr['id']}",
+            }
+        )
+    for center in centers:
+        for tank in center["tanks"]:
+            targets.append(
+                {
+                    "filename": f"center_{center['id']}_{tank['id']}.png",
+                    "url": f"{base_url}/scan?type=center&center_id={center['id']}&tank_id={tank['id']}",
+                }
+            )
+    targets.append({"filename": "warehouse_main.png", "url": f"{base_url}/scan?type=warehouse&id=main"})
+    return targets
+
+
+def _ensure_qr_codes(base_url: str):
+    out_dir = Path(app.root_path) / "static" / "qr"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for target in _qr_targets(base_url):
+        img_path = out_dir / target["filename"]
+        img = qrcode.make(target["url"])
+        img.save(img_path)
+
+
 def _now():
     return datetime.utcnow()
 
@@ -337,6 +377,7 @@ def _seed_history():
 
 
 _seed_history()
+_ensure_qr_codes(_get_base_url())
 
 
 def _haversine_km(a, b):
@@ -832,6 +873,11 @@ def view_llegada():
 @app.route("/admin")
 def view_admin():
     return render_template("admin.html")
+
+
+@app.route("/scan")
+def view_scan():
+    return render_template("scan.html")
 
 
 @app.route("/informes")

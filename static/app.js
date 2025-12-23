@@ -331,6 +331,17 @@ function getSession(key) {
 
 }
 
+function consumePendingScan() {
+  try {
+    const raw = localStorage.getItem("pendingScan");
+    if (!raw) return null;
+    localStorage.removeItem("pendingScan");
+    return JSON.parse(raw);
+  } catch (_e) {
+    return null;
+  }
+}
+
 
 function renderWorkerAssignments(state) {
   const box = document.getElementById("worker-assignment");
@@ -2481,6 +2492,13 @@ async function initSalida() {
 
   });
 
+  const pendingScan = consumePendingScan();
+  if (pendingScan?.type === "truck" && qrTruckSelect) {
+    qrTruckSelect.value = pendingScan.id;
+    qrTruckSelect.dispatchEvent(new Event("change"));
+    flash(`QR de camion ${pendingScan.id} aplicado`);
+  }
+
 
 
   form?.addEventListener("submit", async (e) => {
@@ -2764,6 +2782,13 @@ async function initDestino() {
 
       };
 
+      const pendingScan = consumePendingScan();
+      if (pendingScan?.type === "center") {
+        const optionValue = `${pendingScan.center_id}|${pendingScan.tank_id || ""}`;
+        qrSelect.value = optionValue;
+        qrSelect.dispatchEvent(new Event("change"));
+      }
+
     }
 
 
@@ -2927,6 +2952,37 @@ function buildArrivalView(route) {
 }
 
 
+async function initScan() {
+
+  const status = document.getElementById("scan-status");
+
+  const params = new URLSearchParams(window.location.search);
+
+  const payload = {
+    type: params.get("type"),
+    id: params.get("id"),
+    center_id: params.get("center_id"),
+    tank_id: params.get("tank_id"),
+  };
+
+  try {
+    localStorage.setItem("pendingScan", JSON.stringify(payload));
+  } catch (_e) {
+    /* ignore */
+  }
+
+  if (status) status.textContent = "QR capturado. Redirigiendo al paso adecuado...";
+
+  let dest = "/";
+
+  if (payload.type === "truck") dest = "/salida";
+  else if (payload.type === "center") dest = "/destino";
+  else if (payload.type === "warehouse") dest = "/llegada";
+
+  setTimeout(() => (window.location.href = dest), 200);
+}
+
+
 
 async function initLlegada() {
 
@@ -2938,6 +2994,7 @@ async function initLlegada() {
 
   const qrBtn = document.getElementById("qr-warehouse-btn");
 
+  let pendingScan = consumePendingScan();
 
 
   async function load() {
@@ -2965,6 +3022,12 @@ async function initLlegada() {
     }
 
     if (!route || route.status !== "regresando") return;
+
+    if (pendingScan?.type === "warehouse") {
+      pendingScan = null;
+      await handleWarehouseQR();
+      return;
+    }
 
     const form = document.getElementById("arrive-warehouse-form");
 
@@ -3475,5 +3538,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "center") initCenterPage();
 
   if (page === "reports") initReports();
+
+  if (page === "scan") initScan();
 
 });
