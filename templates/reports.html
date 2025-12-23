@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Informes | Alborani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="reports">
+    <main class="layout">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Informes</div>
+            <h2>Tiempos en centros por operario</h2>
+            <p class="muted small">Filtra por centro y operario para ver minutos en cada parada.</p>
+          </div>
+          <div class="chip" id="reports-session-label"></div>
+        </div>
+
+        <div class="filter-row">
+          <label>Centro
+            <select id="filter-center"></select>
+          </label>
+          <label>Operario
+            <select id="filter-worker"></select>
+          </label>
+        </div>
+
+        <div id="report-chart" class="report-grid"></div>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

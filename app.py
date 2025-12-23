@@ -1,4 +1,4 @@
-import math
+﻿import math
 import random
 from copy import deepcopy
 from datetime import datetime, timedelta
@@ -56,154 +56,154 @@ def _make_tank(prefix: str, idx: int, base_lat: float, base_lon: float, product:
 def _build_centers():
     return [
         {
-            "id": "eurosgold",
-            "name": "Eurosgold",
-            "location": {"lat": 36.7960, "lon": -2.5530},
+            "id": "eurogold",
+            "name": "Eurogold",
+            "location": {"lat": 36.8273, "lon": -2.1506},
             "tanks": [
-                _make_tank("EG", 1, 36.7960, -2.5530, "Calcio + nitrato"),
-                _make_tank("EG", 2, 36.7960, -2.5530, "NPK 15-5-30"),
-                _make_tank("EG", 3, 36.7960, -2.5530, "Amonio + micro"),
+                _make_tank("EG", 1, 36.8273, -2.1506, "Calcio + nitrato"),
+                _make_tank("EG", 2, 36.8273, -2.1506, "NPK 15-5-30"),
+                _make_tank("EG", 3, 36.8273, -2.1506, "Amonio + micro"),
             ],
         },
         {
             "id": "matias",
-            "name": "Matias",
-            "location": {"lat": 36.8200, "lon": -2.6000},
+            "name": "Los Matias",
+            "location": {"lat": 36.829171, "lon": -2.160965},
             "tanks": [
-                _make_tank("MT", 1, 36.8200, -2.6000, "Urea foliar"),
-                _make_tank("MT", 2, 36.8200, -2.6000, "NPK 12-12-24"),
-                _make_tank("MT", 3, 36.8200, -2.6000, "Fosforo acido"),
+                _make_tank("MT", 1, 36.829171, -2.160965, "Urea foliar"),
+                _make_tank("MT", 2, 36.829171, -2.160965, "NPK 12-12-24"),
+                _make_tank("MT", 3, 36.829171, -2.160965, "Fosforo acido"),
             ],
         },
         {
             "id": "cortezones",
-            "name": "Cortezones",
-            "location": {"lat": 36.7590, "lon": -2.6560},
+            "name": "Los Cortezones",
+            "location": {"lat": 36.904461, "lon": -2.205572},
             "tanks": [
-                _make_tank("CZ", 1, 36.7590, -2.6560, "Potasio liquido"),
-                _make_tank("CZ", 2, 36.7590, -2.6560, "Calcio + boro"),
-                _make_tank("CZ", 3, 36.7590, -2.6560, "PK 0-20-30"),
+                _make_tank("CZ", 1, 36.904461, -2.205572, "Potasio liquido"),
+                _make_tank("CZ", 2, 36.904461, -2.205572, "Calcio + boro"),
+                _make_tank("CZ", 3, 36.904461, -2.205572, "PK 0-20-30"),
             ],
         },
         {
             "id": "hornillos",
-            "name": "Hornillos",
-            "location": {"lat": 36.7700, "lon": -1.8760},
+            "name": "Los Hornillos",
+            "location": {"lat": 36.830851, "lon": -2.139645},
             "tanks": [
-                _make_tank("HN", 1, 36.7700, -1.8760, "NPK 9-12-30"),
-                _make_tank("HN", 2, 36.7700, -1.8760, "Potasio + Ca"),
-                _make_tank("HN", 3, 36.7700, -1.8760, "Aqua micronizado"),
+                _make_tank("HN", 1, 36.830851, -2.139645, "NPK 9-12-30"),
+                _make_tank("HN", 2, 36.830851, -2.139645, "Potasio + Ca"),
+                _make_tank("HN", 3, 36.830851, -2.139645, "Aqua micronizado"),
             ],
         },
         {
             "id": "vicar",
             "name": "Vicar",
-            "location": {"lat": 36.8317, "lon": -2.6430},
+            "location": {"lat": 36.791086, "lon": -2.65487},
             "tanks": [
-                _make_tank("VC", 1, 36.8317, -2.6430, "NPK 16-8-24"),
-                _make_tank("VC", 2, 36.8317, -2.6430, "Riego bicarbonato"),
-                _make_tank("VC", 3, 36.8317, -2.6430, "Corrector de Zn"),
+                _make_tank("VC", 1, 36.791086, -2.65487, "NPK 16-8-24"),
+                _make_tank("VC", 2, 36.791086, -2.65487, "Riego bicarbonato"),
+                _make_tank("VC", 3, 36.791086, -2.65487, "Corrector de Zn"),
             ],
         },
         # Centros de prueba adicionales
         {
             "id": "prueba1",
             "name": "Prueba 1",
-            "location": {"lat": 36.700, "lon": -2.500},
+            "location": {"lat": 36.8325, "lon": -2.1450},
             "tanks": [
-                _make_tank("P1", 1, 36.700, -2.500, "NPK 15-5-30"),
-                _make_tank("P1", 2, 36.700, -2.500, "Calcio + nitrato"),
-                _make_tank("P1", 3, 36.700, -2.500, "Micros mixtos"),
+                _make_tank("P1", 1, 36.8325, -2.1450, "NPK 15-5-30"),
+                _make_tank("P1", 2, 36.8325, -2.1450, "Calcio + nitrato"),
+                _make_tank("P1", 3, 36.8325, -2.1450, "Micros mixtos"),
             ],
         },
         {
             "id": "prueba2",
             "name": "Prueba 2",
-            "location": {"lat": 36.710, "lon": -2.510},
+            "location": {"lat": 36.8235, "lon": -2.1675},
             "tanks": [
-                _make_tank("P2", 1, 36.710, -2.510, "NPK 12-12-24"),
-                _make_tank("P2", 2, 36.710, -2.510, "Amonio + micro"),
-                _make_tank("P2", 3, 36.710, -2.510, "Fosforo acido"),
+                _make_tank("P2", 1, 36.8235, -2.1675, "NPK 12-12-24"),
+                _make_tank("P2", 2, 36.8235, -2.1675, "Amonio + micro"),
+                _make_tank("P2", 3, 36.8235, -2.1675, "Fosforo acido"),
             ],
         },
         {
             "id": "prueba3",
             "name": "Prueba 3",
-            "location": {"lat": 36.720, "lon": -2.520},
+            "location": {"lat": 36.8365, "lon": -2.1320},
             "tanks": [
-                _make_tank("P3", 1, 36.720, -2.520, "Potasio liquido"),
-                _make_tank("P3", 2, 36.720, -2.520, "NPK 9-12-30"),
-                _make_tank("P3", 3, 36.720, -2.520, "Corrector de Zn"),
+                _make_tank("P3", 1, 36.8365, -2.1320, "Potasio liquido"),
+                _make_tank("P3", 2, 36.8365, -2.1320, "NPK 9-12-30"),
+                _make_tank("P3", 3, 36.8365, -2.1320, "Corrector de Zn"),
             ],
         },
         {
             "id": "prueba4",
             "name": "Prueba 4",
-            "location": {"lat": 36.730, "lon": -2.530},
+            "location": {"lat": 36.9090, "lon": -2.2135},
             "tanks": [
-                _make_tank("P4", 1, 36.730, -2.530, "Calcio + boro"),
-                _make_tank("P4", 2, 36.730, -2.530, "NPK 16-8-24"),
-                _make_tank("P4", 3, 36.730, -2.530, "Urea foliar"),
+                _make_tank("P4", 1, 36.9090, -2.2135, "Calcio + boro"),
+                _make_tank("P4", 2, 36.9090, -2.2135, "NPK 16-8-24"),
+                _make_tank("P4", 3, 36.9090, -2.2135, "Urea foliar"),
             ],
         },
         {
             "id": "prueba5",
             "name": "Prueba 5",
-            "location": {"lat": 36.740, "lon": -2.540},
+            "location": {"lat": 36.7845, "lon": -2.6485},
             "tanks": [
-                _make_tank("P5", 1, 36.740, -2.540, "PK 0-20-30"),
-                _make_tank("P5", 2, 36.740, -2.540, "Riego bicarbonato"),
-                _make_tank("P5", 3, 36.740, -2.540, "Micros mixtos"),
+                _make_tank("P5", 1, 36.7845, -2.6485, "PK 0-20-30"),
+                _make_tank("P5", 2, 36.7845, -2.6485, "Riego bicarbonato"),
+                _make_tank("P5", 3, 36.7845, -2.6485, "Micros mixtos"),
             ],
         },
         {
             "id": "prueba6",
             "name": "Prueba 6",
-            "location": {"lat": 36.750, "lon": -2.550},
+            "location": {"lat": 36.8208, "lon": -2.1550},
             "tanks": [
-                _make_tank("P6", 1, 36.750, -2.550, "NPK 15-5-30"),
-                _make_tank("P6", 2, 36.750, -2.550, "Corrector de Zn"),
-                _make_tank("P6", 3, 36.750, -2.550, "Potasio + Ca"),
+                _make_tank("P6", 1, 36.8208, -2.1550, "NPK 15-5-30"),
+                _make_tank("P6", 2, 36.8208, -2.1550, "Corrector de Zn"),
+                _make_tank("P6", 3, 36.8208, -2.1550, "Potasio + Ca"),
             ],
         },
         {
             "id": "prueba7",
             "name": "Prueba 7",
-            "location": {"lat": 36.760, "lon": -2.560},
+            "location": {"lat": 36.8350, "lon": -2.1520},
             "tanks": [
-                _make_tank("P7", 1, 36.760, -2.560, "NPK 12-12-24"),
-                _make_tank("P7", 2, 36.760, -2.560, "Calcio + nitrato"),
-                _make_tank("P7", 3, 36.760, -2.560, "Aqua micronizado"),
+                _make_tank("P7", 1, 36.8350, -2.1520, "NPK 12-12-24"),
+                _make_tank("P7", 2, 36.8350, -2.1520, "Calcio + nitrato"),
+                _make_tank("P7", 3, 36.8350, -2.1520, "Aqua micronizado"),
             ],
         },
         {
             "id": "prueba8",
             "name": "Prueba 8",
-            "location": {"lat": 36.770, "lon": -2.570},
+            "location": {"lat": 36.8980, "lon": -2.1940},
             "tanks": [
-                _make_tank("P8", 1, 36.770, -2.570, "Fosforo acido"),
-                _make_tank("P8", 2, 36.770, -2.570, "NPK 9-12-30"),
-                _make_tank("P8", 3, 36.770, -2.570, "Calcio + boro"),
+                _make_tank("P8", 1, 36.8980, -2.1940, "Fosforo acido"),
+                _make_tank("P8", 2, 36.8980, -2.1940, "NPK 9-12-30"),
+                _make_tank("P8", 3, 36.8980, -2.1940, "Calcio + boro"),
             ],
         },
         {
             "id": "prueba9",
             "name": "Prueba 9",
-            "location": {"lat": 36.780, "lon": -2.580},
+            "location": {"lat": 36.8260, "lon": -2.1455},
             "tanks": [
-                _make_tank("P9", 1, 36.780, -2.580, "NPK 16-8-24"),
-                _make_tank("P9", 2, 36.780, -2.580, "Potasio liquido"),
-                _make_tank("P9", 3, 36.780, -2.580, "Micros mixtos"),
+                _make_tank("P9", 1, 36.8260, -2.1455, "NPK 16-8-24"),
+                _make_tank("P9", 2, 36.8260, -2.1455, "Potasio liquido"),
+                _make_tank("P9", 3, 36.8260, -2.1455, "Micros mixtos"),
             ],
         },
         {
             "id": "prueba10",
             "name": "Prueba 10",
-            "location": {"lat": 36.790, "lon": -2.590},
+            "location": {"lat": 36.7950, "lon": -2.6625},
             "tanks": [
-                _make_tank("P10", 1, 36.790, -2.590, "Riego bicarbonato"),
-                _make_tank("P10", 2, 36.790, -2.590, "NPK 12-12-24"),
-                _make_tank("P10", 3, 36.790, -2.590, "Potasio + Ca"),
+                _make_tank("P10", 1, 36.7950, -2.6625, "Riego bicarbonato"),
+                _make_tank("P10", 2, 36.7950, -2.6625, "NPK 12-12-24"),
+                _make_tank("P10", 3, 36.7950, -2.6625, "Potasio + Ca"),
             ],
         },
     ]
@@ -287,7 +287,7 @@ def _seed_history():
                 "delivered_l": 3200,
             },
             {
-                "center_id": "eurosgold",
+                "center_id": "eurogold",
                 "tank_id": "EG-2",
                 "liters": 2500,
                 "product": "NPK 15-5-30",
@@ -304,7 +304,7 @@ def _seed_history():
         "history": [
             {"event": "planificada", "note": "2 destinos", "ts": started},
             {"event": "llegada", "note": "matias / MT-1", "ts": stop1_arrival},
-            {"event": "llegada", "note": "eurosgold / EG-2", "ts": stop2_arrival},
+            {"event": "llegada", "note": "eurogold / EG-2", "ts": stop2_arrival},
             {"event": "almacen", "note": "Ruta cerrada", "ts": finished},
         ],
         "current_leg": None,
@@ -318,7 +318,7 @@ def _seed_history():
                 "ts": stop1_depart,
                 "truck_id": "TR-02",
                 "tank_id": "MT-1",
-                "center": "Matias",
+                "center": "Los Matias",
                 "delivered_l": 3200,
                 "by": "prueba2",
                 "note": "Descarga turno manana",
@@ -327,7 +327,7 @@ def _seed_history():
                 "ts": stop2_depart,
                 "truck_id": "TR-02",
                 "tank_id": "EG-2",
-                "center": "Eurosgold",
+                "center": "Eurogold",
                 "delivered_l": 2500,
                 "by": "prueba2",
                 "note": "Entrega completa",
@@ -432,6 +432,7 @@ def _collect_urgent_centers():
                     "location": center["location"],
                     "tanks": urgent_tanks,
                     "total_deficit": total_deficit,
+                    "urgent_count": len(urgent_tanks),
                 }
             )
     return urgent
@@ -542,19 +543,30 @@ def _build_auto_route_for_truck(truck: Dict, center_batch: List[Dict], worker: O
     ordered_centers = _order_centers_by_distance(center_batch, WAREHOUSE)
     stops = []
     remaining_capacity = truck.get("capacity_l", 0)
+    first_center_id = None
 
     for center in ordered_centers:
         if remaining_capacity <= 0:
             break
-        for tank in center["tanks"]:
+        center_id = center["center_id"]
+        center_total_deficit = sum(t.get("deficit_l", 0) for t in center.get("tanks", []))
+        if first_center_id is None:
+            first_center_id = center_id
+        # No abrir un centro nuevo si solo quedan migajas (<1000 L)
+        if center_id != first_center_id and min(remaining_capacity, center_total_deficit) < 1000:
+            continue
+
+        for tank in sorted(center["tanks"], key=lambda t: t.get("deficit_l", 0), reverse=True):
             if remaining_capacity <= 0:
                 break
             liters = min(tank["deficit_l"], remaining_capacity)
+            if center_id != first_center_id and liters < 1000:
+                continue
             if liters <= 0:
                 continue
             stops.append(
                 {
-                    "center_id": center["center_id"],
+                    "center_id": center_id,
                     "tank_id": tank["id"],
                     "liters": liters,
                     "product": tank["product"],
@@ -600,7 +612,7 @@ def _build_auto_route_for_truck(truck: Dict, center_batch: List[Dict], worker: O
 
 
 def _auto_plan_urgent_routes():
-    urgent = sorted(_collect_urgent_centers(), key=lambda c: c["total_deficit"], reverse=True)
+    urgent = sorted(_collect_urgent_centers(), key=lambda c: (c.get("urgent_count", 0), c["total_deficit"]), reverse=True)
     available_trucks = [
         t for t in trucks if t["status"] == "parked" and not t.get("route_id") and t.get("capacity_l")
     ]
@@ -611,9 +623,22 @@ def _auto_plan_urgent_routes():
     random.shuffle(worker_pool)
 
     assignments = {t["id"]: [] for t in available_trucks}
-    for idx, center in enumerate(urgent):
-        truck = available_trucks[idx % len(available_trucks)]
-        assignments[truck["id"]].append(center)
+
+    # Asignar un centro prioritario a cada camion (prioriza centros con mas tanques en alerta)
+    for tr in available_trucks:
+        if urgent:
+            assignments[tr["id"]].append(urgent.pop(0))
+
+    # Repartir el resto intentando agrupar centros cercanos en la misma ruta
+    idx = 0
+    while urgent:
+        tr = available_trucks[idx % len(available_trucks)]
+        idx += 1
+        batch = assignments.get(tr["id"], [])
+        last_loc = batch[-1]["location"] if batch else WAREHOUSE
+        nearest_idx = min(range(len(urgent)), key=lambda i: _haversine_km(last_loc, urgent[i]["location"]))
+        batch.append(urgent.pop(nearest_idx))
+        assignments[tr["id"]] = batch
 
     planned_routes = []
     for idx, tr in enumerate(available_trucks):
@@ -807,6 +832,11 @@ def view_llegada():
 @app.route("/admin")
 def view_admin():
     return render_template("admin.html")
+
+
+@app.route("/informes")
+def view_reports():
+    return render_template("reports.html")
 
 
 @app.route("/centro/<center_id>")
@@ -1151,3 +1181,4 @@ def api_arrive_warehouse():
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5009)
+

@@ -16,10 +16,16 @@ const logFilters = { range: "24h", worker: "all", center: "all" };
 
 function toggleGate(show) {
   const gate = document.getElementById("login-gate");
+  const html = document.documentElement;
   const appShell = document.querySelectorAll(".admin-only, .worker-only, .quick-links");
   if (gate) gate.style.display = show ? "grid" : "none";
   if (show) {
+    html.classList.add("no-session");
+    html.classList.remove("has-session");
     appShell.forEach((el) => (el.style.display = "none"));
+  } else {
+    html.classList.add("has-session");
+    html.classList.remove("no-session");
   }
 }
 
@@ -251,9 +257,12 @@ function worstStatus(tanks = []) {
 
 function centerSeverity(center) {
 
-  const rank = severityRank[worstStatus(center.tanks || [])] ?? 0;
-
-  return rank;
+  const tanks = center.tanks || [];
+  const worst = severityRank[worstStatus(tanks)] ?? 0;
+  const alertCount = tanks.filter((t) => t.status === "critical" || t.status === "alert").length;
+  const warnCount = tanks.filter((t) => t.status === "warn").length;
+  const minPct = Math.min(...tanks.map((t) => t.percentage || 100));
+  return { worst, alertCount, warnCount, minPct: Number.isFinite(minPct) ? minPct : 100 };
 
 }
 
@@ -263,9 +272,16 @@ function sortCentersByAlert(centers = []) {
 
   return [...centers].sort((a, b) => {
 
-    const diff = centerSeverity(b) - centerSeverity(a);
+    const sa = centerSeverity(a);
+    const sb = centerSeverity(b);
 
-    if (diff !== 0) return diff;
+    if (sb.worst !== sa.worst) return sb.worst - sa.worst;
+
+    if (sb.alertCount !== sa.alertCount) return sb.alertCount - sa.alertCount;
+
+    if (sb.warnCount !== sa.warnCount) return sb.warnCount - sa.warnCount;
+
+    if (sa.minPct !== sb.minPct) return sa.minPct - sb.minPct;
 
     const countA = (a.alerts || []).length;
 
@@ -1198,44 +1214,59 @@ function renderAlarms(alerts, targetId = "alarms-panel") {
 
   }
 
-  const sevOrder = { alta: 2, media: 1, baja: 0 };
+  const grouped = alerts.reduce((acc, a) => {
+    acc[a.center] = acc[a.center] || [];
+    acc[a.center].push(a);
+    return acc;
+  }, {});
 
-  alerts
+  const parsePct = (a) => {
+    const pctMatch = (a.message || "").match(/([0-9]+\\.?[0-9]*)%/);
+    return pctMatch ? parseFloat(pctMatch[1]) : 100;
+  };
 
-    .slice()
-
-    .sort((a, b) => (sevOrder[b.severity] || 0) - (sevOrder[a.severity] || 0))
-
-    .forEach((a) => {
-
-      const card = document.createElement("div");
-
-      const color = a.severity === "alta" ? statusColor.critical : statusColor.warn;
-
-      card.className = "alert-card";
-
-      card.innerHTML = `
-
-        <div class="alert-top">
-
-          <span>${a.center}</span>
-
-          <span class="alert-dot" style="background:${color};"></span>
-
-        </div>
-
-        <div class="alert-mini">${a.tank_id} - ${a.message}</div>
-        ${
-          a.runout_eta
-            ? `<div class="muted tiny">ETA: ${formatEta(a.runout_eta)}</div>`
-            : ""
-        }
-
-      `;
-
-      box.appendChild(card);
-
+  const groups = Object.entries(grouped)
+    .map(([center, list]) => {
+      const sevRank = list.some((a) => a.severity === "alta") ? 2 : 1;
+      const minPct = Math.min(...list.map(parsePct));
+      return { center, list, sevRank, minPct };
+    })
+    .sort((a, b) => {
+      if (b.sevRank !== a.sevRank) return b.sevRank - a.sevRank;
+      return a.minPct - b.minPct;
     });
+
+  groups.forEach(({ center, list, sevRank }) => {
+    const color = sevRank === 2 ? statusColor.critical : statusColor.warn;
+    const items = list
+      .slice()
+      .sort((a, b) => {
+        const sa = a.severity === "alta" ? 2 : 1;
+        const sb = b.severity === "alta" ? 2 : 1;
+        if (sb !== sa) return sb - sa;
+        return parsePct(a) - parsePct(b);
+      })
+      .map((a) => {
+        const pct = parsePct(a);
+        const eta = a.runout_eta ? formatEta(a.runout_eta) : "";
+        return `<div class="alert-chip">
+          <span>${a.tank_id}</span>
+          <span>${Number.isFinite(pct) ? pct + "%" : ""}</span>
+          <span>${eta ? eta : ""}</span>
+        </div>`;
+      })
+      .join("");
+    const card = document.createElement("div");
+    card.className = "alert-card grouped";
+    card.innerHTML = `
+      <div class="alert-top">
+        <span>${center}</span>
+        <span class="alert-dot" style="background:${color};"></span>
+      </div>
+      <div class="alert-mini">${items}</div>
+    `;
+    box.appendChild(card);
+  });
 
 }
 
@@ -1382,7 +1413,7 @@ function renderRefillTable(state) {
           </div>
           <div class="refill-level"><div class="level-bar" style="width:${Math.max(4, t.percentage)}%"></div></div>
           <div class="muted small">Faltan ${formatLiters(t.deficit_l || 0)}</div>
-          <div class="muted tiny">ETA ${eta}${t.runout_hours ? " (" + formatHoursLeft(t.runout_hours) + ")" : ""}</div>
+          <div class="muted tiny">Previsto ${eta}${t.runout_hours ? " (" + formatHoursLeft(t.runout_hours) + ")" : ""}</div>
         </div>
       `;
     })
@@ -1397,7 +1428,7 @@ function renderUrgentPlanner(state) {
   const urgent = state.urgent_centers || [];
   const availableTrucks = (state.trucks || []).filter((t) => t.status === "parked" && !t.route_id);
   if (!urgent.length) {
-    centerBox.innerHTML = `<div class="muted small">Sin dep&oacute;sitos al 20% o menos.</div>`;
+    centerBox.innerHTML = `<div class="empty-card">Sin dep&oacute;sitos al 20% o menos.</div>`;
   } else {
     const sortedCenters = urgent
       .map((c) => {
@@ -1405,7 +1436,7 @@ function renderUrgentPlanner(state) {
         return { ...c, minPct };
       })
       .sort((a, b) => a.minPct - b.minPct);
-    centerBox.innerHTML = `<div class="refill-grid">${sortedCenters
+    centerBox.innerHTML = `<div class="urgent-card-grid">${sortedCenters
       .map((c) => {
         const etaMs = c.tanks
           .map((t) => (t.runout_eta ? new Date(t.runout_eta).getTime() : Number.MAX_SAFE_INTEGER))
@@ -1413,7 +1444,7 @@ function renderUrgentPlanner(state) {
         const eta = etaMs && Number.isFinite(etaMs) ? new Date(etaMs) : null;
         const topTanks = c.tanks.slice().sort((a, b) => a.percentage - b.percentage).slice(0, 2);
         return `
-          <div class="refill-card bad">
+          <div class="refill-card bad tight">
             <div class="row spaced">
               <div>
                 <div class="muted tiny">${c.center_name}</div>
@@ -1422,7 +1453,7 @@ function renderUrgentPlanner(state) {
               <span class="pill tiny">${c.tanks.length} deps</span>
             </div>
             <div class="muted small">Litros urgentes: ${formatLiters(c.total_deficit)}</div>
-            <div class="muted tiny">ETA ${eta ? formatEta(eta) : "n/d"}</div>
+            <div class="muted tiny">Reponer antes de ${eta ? formatEta(eta) : "n/d"}</div>
             <div class="mini-row">
               ${topTanks
                 .map(
@@ -1437,12 +1468,12 @@ function renderUrgentPlanner(state) {
       .join("")}</div>`;
   }
   if (!availableTrucks.length) {
-    truckBox.innerHTML = `<div class="muted small">Sin camiones libres.</div>`;
+    truckBox.innerHTML = `<div class="empty-card">Sin camiones libres.</div>`;
   } else {
-    truckBox.innerHTML = `<div class="refill-grid">${availableTrucks
+    truckBox.innerHTML = `<div class="truck-card-grid">${availableTrucks
       .map(
         (t) => `
-        <div class="refill-card neutral">
+        <div class="truck-card compact">
           <div class="row spaced">
             <strong>${t.id}</strong>
             <span class="pill tiny">${formatLiters(t.capacity_l)}</span>
@@ -1491,6 +1522,130 @@ function renderUrgentPreview(state) {
       `;
     })
     .join("")}</div>`;
+}
+
+function collectStopDurations(routes = []) {
+  const rows = [];
+  routes.forEach((r) => {
+    const worker = r.worker || "sin_operario";
+    (r.stops || []).forEach((s) => {
+      if (!s.arrival_at || !s.depart_at) return;
+      const arrival = new Date(s.arrival_at);
+      const depart = new Date(s.depart_at);
+      const minutes = Math.max(0, Math.round((depart - arrival) / 60000));
+      rows.push({
+        center_id: s.center_id,
+        tank_id: s.tank_id,
+        worker,
+        minutes,
+        route_id: r.id,
+        arrival,
+      });
+    });
+  });
+  return rows;
+}
+
+function renderReportsChart(rows, centersMap, filters) {
+  const box = document.getElementById("report-chart");
+  if (!box) return;
+  const { centerId, worker } = filters;
+  const filtered = rows.filter((row) => {
+    const centerOk = centerId === "all" || row.center_id === centerId;
+    const workerOk = worker === "all" || row.worker === worker;
+    return centerOk && workerOk;
+  });
+
+  if (!filtered.length) {
+    box.innerHTML = `<div class="muted small">Sin datos de tiempos con los filtros actuales.</div>`;
+    return;
+  }
+
+  const grouped = filtered.reduce((acc, row) => {
+    acc[row.center_id] = acc[row.center_id] || [];
+    acc[row.center_id].push(row);
+    return acc;
+  }, {});
+
+  const maxMinutes = Math.max(...filtered.map((r) => r.minutes), 1);
+
+  box.innerHTML = Object.entries(grouped)
+    .map(([centerId, list]) => {
+      const centerName = centersMap[centerId]?.name || centerId;
+      const byWorker = list.reduce((acc, row) => {
+        acc[row.worker] = (acc[row.worker] || 0) + row.minutes;
+        return acc;
+      }, {});
+      const rowsHtml = Object.entries(byWorker)
+        .sort((a, b) => b[1] - a[1])
+        .map(([w, minutes]) => {
+          const pct = Math.max(4, Math.round((minutes / maxMinutes) * 100));
+          return `
+            <div class="bar-row">
+              <span class="muted small">${w}</span>
+              <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+              <span class="bar-meta">${minutes} min</span>
+            </div>
+          `;
+        })
+        .join("");
+      return `
+        <div class="bar-card">
+          <h3>${centerName}</h3>
+          ${rowsHtml}
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function initReports() {
+  const adminSession = getSession("adminSession");
+  const label = document.getElementById("reports-session-label");
+  if (!adminSession) {
+    flash("Inicia sesion de admin para ver informes.");
+    window.location.href = "/admin";
+    return;
+  }
+  if (label) label.textContent = `Sesion: ${adminSession.user}`;
+
+  const centerSelect = document.getElementById("filter-center");
+  const workerSelect = document.getElementById("filter-worker");
+
+  const state = await fetchState();
+  const centers = state.centers || [];
+  const centersMap = centers.reduce((acc, c) => {
+    acc[c.id] = c;
+    return acc;
+  }, {});
+
+  const allRoutes = [...(state.route_history || []), ...(state.routes || [])];
+  const rows = collectStopDurations(allRoutes);
+
+  if (centerSelect) {
+    centerSelect.innerHTML =
+      `<option value="all">Todos los centros</option>` +
+      centers.map((c) => `<option value="${c.id}">${c.name}</option>`).join("");
+  }
+
+  if (workerSelect) {
+    const workers = Array.from(new Set(rows.map((r) => r.worker))).sort();
+    workerSelect.innerHTML =
+      `<option value="all">Todos los operarios</option>` +
+      workers.map((w) => `<option value="${w}">${w}</option>`).join("");
+  }
+
+  const render = () => {
+    renderReportsChart(rows, centersMap, {
+      centerId: centerSelect?.value || "all",
+      worker: workerSelect?.value || "all",
+    });
+  };
+
+  centerSelect?.addEventListener("change", render);
+  workerSelect?.addEventListener("change", render);
+
+  render();
 }
 
 function renderWorkerRoutes(state) {
@@ -2050,6 +2205,15 @@ function ensureWorkerSession() {
 
 }
 
+function requireWorkerSession(redirectTo = "/trabajador") {
+  const session = ensureWorkerSession();
+  if (!session) {
+    window.location.href = redirectTo;
+    return null;
+  }
+  return session;
+}
+
 
 
 function populateDestinations(centers, container) {
@@ -2076,7 +2240,7 @@ function populateDestinations(centers, container) {
 
         <label>Deposito<select class="tank-select"></select></label>
 
-        <label>Litros<input type="number" class="liters-input" value="2000" step="100" min="0" /></label>
+        <label>Litros<input type="number" class="liters-input" value="2000" step="1" min="0" /></label>
 
         <label>Producto<input class="product-input" placeholder="Producto especifico (opcional)" /></label>
 
@@ -2252,6 +2416,8 @@ async function initCenterPage() {
 async function initSalida() {
 
   refreshSessionBadges();
+
+  if (!requireWorkerSession()) return;
 
   const state = await fetchState();
 
@@ -2444,7 +2610,7 @@ function buildRouteView(route, centers) {
 
       <form id="complete-stop-form" class="stack destination-item">
 
-        <label>Litros descargados<input type="number" name="delivered" value="${stop?.liters || 0}" step="100" min="0" /></label>
+        <label>Litros descargados<input type="number" name="delivered" value="${stop?.liters || 0}" step="1" min="0" /></label>
 
         <label>Notas<input name="note" placeholder="Observaciones" /></label>
 
@@ -2506,13 +2672,19 @@ async function initDestino() {
 
   refreshSessionBadges();
 
+  if (!requireWorkerSession()) return;
+
 
 
   async function load() {
 
-    const state = await fetchState();
-
     const session = ensureWorkerSession();
+    if (!session) {
+      window.location.href = "/trabajador";
+      return;
+    }
+
+    const state = await fetchState();
 
     const routeId = getSession("activeRouteId");
 
@@ -2760,6 +2932,8 @@ async function initLlegada() {
 
   refreshSessionBadges();
 
+  if (!requireWorkerSession()) return;
+
   const container = document.getElementById("arrival-content");
 
   const qrBtn = document.getElementById("qr-warehouse-btn");
@@ -2768,9 +2942,13 @@ async function initLlegada() {
 
   async function load() {
 
-    const state = await fetchState();
-
     const session = ensureWorkerSession();
+    if (!session) {
+      window.location.href = "/trabajador";
+      return;
+    }
+
+    const state = await fetchState();
 
     const routeId = getSession("activeRouteId");
 
@@ -2907,6 +3085,12 @@ async function initLlegada() {
 
 
 async function initWorkerLogin() {
+
+  const existing = ensureWorkerSession();
+  if (existing) {
+    window.location.href = "/salida";
+    return;
+  }
 
   const form = document.getElementById("worker-login-form");
 
@@ -3057,13 +3241,45 @@ async function initAdmin() {
 
     const statsBox = document.getElementById("admin-stats");
     if (!statsBox) return;
-    const delivered = state.route_history.reduce((acc, r) => acc + (r.total_delivered || 0), 0);
-    statsBox.innerHTML = `
-      <div class="mini-card"><strong>Activas</strong>${state.routes.length}</div>
-      <div class="mini-card"><strong>Cerradas</strong>${state.route_history.length}</div>
-      <div class="mini-card"><strong>Litros</strong>${formatLiters(delivered)}</div>
-      <div class="mini-card"><strong>Alertas</strong>${state.alerts.length}</div>
+    const active = state.routes.length;
+    const inProgress = state.routes.filter((r) => r.status && r.status !== "planificada").length;
+    const closed = state.route_history.length;
+    const alerts = state.alerts.length;
+
+    const summarizeRoutes = (routes) =>
+      routes
+        .slice(0, 4)
+        .map((r) => `${r.id} · ${routeStatusLabel[r.status] || r.status}`)
+        .join("<br>");
+
+    const summarizeClosed = (routes) =>
+      routes
+        .slice(0, 4)
+        .map((r) => `${r.id} · ${formatDatePlus1(r.finished_at || r.started_at)}`)
+        .join("<br>");
+
+    const summarizeAlerts = (list) =>
+      list
+        .slice(0, 4)
+        .map((a) => a.message || `${a.center} / ${a.tank_id}`)
+        .join("<br>");
+
+    const buildCard = (label, value, detail, tone = "") => `
+      <div class="mini-card pop-card ${tone}">
+        <div class="stat-title">${label}</div>
+        <div class="stat-value">${value}</div>
+        <div class="popover">${detail || "<span class='muted'>Sin datos</span>"}</div>
+      </div>
     `;
+
+    const inProgressRoutes = state.routes.filter((r) => r.status && r.status !== "planificada");
+
+    statsBox.innerHTML = [
+      buildCard("Activas", active, summarizeRoutes(state.routes)),
+      buildCard("En progreso", inProgress, summarizeRoutes(inProgressRoutes), "warn"),
+      buildCard("Cerradas", closed, summarizeClosed(state.route_history)),
+      buildCard("Alertas", alerts, summarizeAlerts(state.alerts), "bad"),
+    ].join("");
 
   };
 
@@ -3085,124 +3301,49 @@ async function initAdmin() {
 
     if (!box) return;
 
-    const rows = [];
+    const cards = [];
 
     state.routes.forEach((r) => {
-
       const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
-
       const center = state.centers.find((c) => c.id === stop?.center_id);
-
       const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
-
-      rows.push({
-
-        estado: routeStatusLabel[r.status] || r.status,
-
-        ruta: r.id,
-
-        camion: r.truck_id,
-
-        operario: r.worker,
-
-        destino: `${center ? center.name : stop?.center_id || "-"} - ${tank ? tank.label : stop?.tank_id || ""}`,
-
-        litros: formatLiters(r.total_delivered || 0),
-
-        hora: formatDatePlus1(stop?.arrival_at || r.started_at),
-
-        detalle: r,
-
-      });
-
+      cards.push({ data: r, destino: `${center ? center.name : stop?.center_id || "-"} · ${tank ? tank.label : stop?.tank_id || ""}` });
     });
 
     state.route_history.slice(0, 12).forEach((r) => {
-
       const lastStop = r.stops?.[r.stops.length - 1];
-
-      rows.push({
-
-        estado: "Finalizada",
-
-        ruta: r.id,
-
-        camion: r.truck_id,
-
-        operario: r.worker,
-
-        destino: `${lastStop?.center_id || "-"} - ${lastStop?.tank_id || ""}`,
-
-        litros: formatLiters(r.total_delivered || 0),
-
-        hora: formatDatePlus1(r.finished_at),
-
-        detalle: r,
-
-      });
-
+      cards.push({ data: r, destino: `${lastStop?.center_id || "-"} · ${lastStop?.tank_id || ""}` });
     });
 
-    box.innerHTML = `
-
-      <div class="excel-row head">
-
-        <div class="excel-cell">Estado</div>
-
-        <div class="excel-cell">Ruta</div>
-
-        <div class="excel-cell">Camion</div>
-
-        <div class="excel-cell">Operario</div>
-
-        <div class="excel-cell">Destino</div>
-
-        <div class="excel-cell">Litros</div>
-
-        <div class="excel-cell">Hora</div>
-
-        <div class="excel-cell">Detalle</div>
-
-      </div>
-
-      ${rows
-
-        .map(
-
-          (r) => `
-
-            <div class="excel-row">
-
-              <div class="excel-cell">${r.estado}</div>
-
-              <div class="excel-cell">${r.ruta}</div>
-
-              <div class="excel-cell">${r.camion}</div>
-
-              <div class="excel-cell">${r.operario}</div>
-
-              <div class="excel-cell">${r.destino}</div>
-
-              <div class="excel-cell">${r.litros}</div>
-
-              <div class="excel-cell">${r.hora}</div>
-
-              <div class="excel-cell"><button class="mini-btn" data-route="${r.detalle.id}">Ver mas</button></div>
-
+    box.innerHTML = `<div class="route-card-grid">${cards
+      .map(({ data, destino }) => {
+        const status = routeStatusLabel[data.status] || data.status;
+        const liters = formatLiters(data.total_delivered || data.planned_load_l || 0);
+        const when = formatDatePlus1(data.finished_at || data.started_at);
+        return `
+          <div class="route-card compact">
+            <div class="row spaced">
+              <strong>${data.id} · ${data.truck_id}</strong>
+              <span class="status badge">${status}</span>
             </div>
-
-          `
-
-        )
-
-        .join("")}
-
-    `;
+            <div class="tank-meta">
+              <span>${destino}</span>
+              <span>${liters}</span>
+            </div>
+            <div class="tank-meta">
+              <span>${data.worker || "Pendiente"}</span>
+              <span>${when}</span>
+            </div>
+            <button class="mini-btn" data-route="${data.id}">Ver detalle</button>
+          </div>
+        `;
+      })
+      .join("")}</div>`;
 
     box.querySelectorAll("button[data-route]").forEach((btn) => {
       btn.onclick = () => {
         const id = btn.getAttribute("data-route");
-        const route = rows.find((r) => r.detalle.id === id)?.detalle;
+        const route = cards.find((c) => c.data.id === id)?.data;
         if (!route) return;
         openRouteDetail(route, state);
       };
@@ -3226,8 +3367,6 @@ async function initAdmin() {
     renderUrgentPlanner(state);
 
     renderUrgentPreview(state);
-
-    renderAdminCenters(state);
 
     renderRouteTable(state);
 
@@ -3334,5 +3473,7 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "admin") initAdmin();
 
   if (page === "center") initCenterPage();
+
+  if (page === "reports") initReports();
 
 });

@@ -239,9 +239,13 @@ img {
 }
 
 .gate {
-  display: grid;
+  display: none;
   place-items: center;
   min-height: 60vh;
+}
+
+.no-session .gate {
+  display: grid;
 }
 
 .gate-card {
@@ -815,6 +819,14 @@ img {
   border-radius: 14px;
   padding: 12px;
 }
+.route-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.route-card.compact {
+  gap: 6px;
+}
 
 .route-card.emphasis {
   background: linear-gradient(135deg, #f4f8ff, #eef6ff);
@@ -1093,6 +1105,99 @@ destinations-head {
   gap: 10px;
 }
 
+.truck-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.urgent-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.empty-card {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  text-align: center;
+  color: var(--muted);
+  background: #f8fafc;
+}
+
+.urgent-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.urgent-grid .mini-panel {
+  height: 100%;
+}
+
+.excel-board.compact {
+  padding: 8px;
+  gap: 8px;
+}
+
+.refill-card.tight {
+  padding: 10px;
+  gap: 6px;
+}
+
+.panel-head.tight {
+  padding-bottom: 8px;
+}
+
+.report-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.bar-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: var(--card);
+}
+
+.bar-card h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.bar-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 60px;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.bar-track {
+  height: 12px;
+  background: #eef2ff;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #4f46e5, #22c55e);
+  border-radius: 10px;
+}
+
+.bar-meta {
+  text-align: right;
+  font-weight: 700;
+}
+
 .truck-card,
 .mini-card {
   border: 1px solid var(--border);
@@ -1331,6 +1436,21 @@ canvas {
   color: var(--muted);
   font-size: 12px;
 }
+.alert-card.grouped .alert-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.alert-chip {
+  display: grid;
+  grid-template-columns: 1.2fr 0.6fr 1fr;
+  padding: 6px 8px;
+  background: #f8fbff;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+}
 
 .sensor-detail {
   display: grid;
@@ -1465,6 +1585,45 @@ canvas {
   font-weight: 700;
 }
 
+.pop-card {
+  position: relative;
+  cursor: default;
+}
+
+.stat-title {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.stat-value {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.pop-card .popover {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  background: #0f172a;
+  color: #e5e7eb;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border-radius: 8px;
+  min-width: 180px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.15);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.pop-card:hover .popover,
+.pop-card:focus-within .popover {
+  display: block;
+}
+
 @media (max-width: 960px) {
   .hero {
     grid-template-columns: 1fr;
@@ -1486,6 +1645,16 @@ canvas {
   .tank-rect {
     height: 90px;
     width: 36px;
+  }
+  .urgent-grid {
+    grid-template-columns: 1fr;
+  }
+  .bar-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .bar-meta {
+    text-align: left;
   }
   .excel-row {
     grid-template-columns: repeat(2, 1fr);

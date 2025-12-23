@@ -16,6 +16,17 @@
       href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      (function () {
+        try {
+          const hasWorker = localStorage.getItem("workerSession");
+          const hasAdmin = localStorage.getItem("adminSession");
+          document.documentElement.classList.add(hasWorker || hasAdmin ? "has-session" : "no-session");
+        } catch (_e) {
+          document.documentElement.classList.add("no-session");
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body data-page="home">
@@ -31,7 +42,7 @@
         <button class="mini-btn hidden" id="session-toggle" type="button">Sesion</button>
         <nav class="top-links">
           <a href="/">Inicio</a>
-          <a href="/admin" class="admin-only-button">Panel admin</a>
+          <a href="/admin" class="admin-only-button">Panel rutas</a>
         </nav>
         <img src="/static/logo.png" alt="Savian logo" class="extra-logo" />
       </div>
@@ -69,7 +80,7 @@
           <div class="toolbar">
             <button class="btn" id="btn-start-route">Iniciar ruta</button>
             <button class="btn secondary" onclick="window.location.href='/salida'">Registrar salida</button>
-            <button class="btn ghost admin-only-button" onclick="window.location.href='/admin'">Panel administrador</button>
+            <button class="btn ghost admin-only-button" onclick="window.location.href='/admin'">Panel de rutas</button>
             <button class="btn ghost" id="btn-drain">Simular dep&oacute;sitos</button>
           </div>
           <div class="hero-mini">
@@ -177,10 +188,6 @@
           <a class="step-pill" data-step-pill="4" href="/">Paso 4: historial</a>
         </div>
       </section>
-
-      <div class="row spaced" style="margin-top:12px;">
-        <a class="mini-btn" href="/">Volver a inicio</a>
-      </div>
     </main>
 
     <div id="toast" class="toast"></div>
