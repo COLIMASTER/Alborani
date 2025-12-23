@@ -1250,6 +1250,10 @@ destinations-head {
   gap: 10px;
 }
 
+.quick-links {
+  display: none !important;
+}
+
 .row.spaced {
   align-items: flex-start;
 }

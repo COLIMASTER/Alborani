@@ -2432,64 +2432,71 @@ async function initSalida() {
 
   const state = await fetchState();
 
-  const centers = state.centers;
-
-  const form = document.getElementById("plan-route-form");
-
-  const originInput = document.getElementById("origin-input");
-
-  const productInput = document.getElementById("product-type");
-
-  const loadInput = document.getElementById("load-input");
-
-  if (originInput && !originInput.value) originInput.value = state.warehouse.name;
-
-
-
-  const truckSelect = document.getElementById("truck-select");
-
-  if (truckSelect) {
-
-    truckSelect.innerHTML = state.trucks
-
-      .map((t) => `<option value="${t.id}">${t.id} - ${t.driver} (${truckStatusLabel[t.status]})</option>`)
-
-      .join("");
-
-  }
-
-
-
-  const destContainer = document.getElementById("destinations");
-
-  if (destContainer) populateDestinations(centers, destContainer);
-
   renderTruckGrid(state.trucks);
 
-  renderMiniCenters(centers);
+  renderMiniCenters(state.centers);
 
-
+  const planned = (state.routes || []).filter((r) => r.status === "planificada");
 
   const qrTruckSelect = document.getElementById("qr-truck-select");
+  const selectedTruckBox = document.getElementById("selected-truck");
+  const activateBtn = document.getElementById("btn-activate-truck");
+  if (selectedTruckBox) selectedTruckBox.textContent = "Escanea un QR o elige un cami\u00f3n.";
 
-  qrTruckSelect?.addEventListener("change", (e) => {
+  const ensureSession = () => {
+    const session = ensureWorkerSession();
+    if (!session) {
+      window.openSessionModal?.("worker");
+      return null;
+    }
+    return session;
+  };
 
-    const code = e.target.value;
+  const updateSelected = (truckId) => {
+    const route = planned.find((r) => r.truck_id === truckId);
+    if (!route) {
+      if (selectedTruckBox) selectedTruckBox.innerHTML = `<div class="muted">No hay ruta planificada para este cami&oacute;n.</div>`;
+      if (activateBtn) activateBtn.disabled = true;
+      return;
+    }
+    if (selectedTruckBox) {
+      selectedTruckBox.innerHTML = `<strong>${truckId}</strong><div class="muted small">Ruta ${route.id} pendiente de activar.</div>`;
+    }
+    if (activateBtn) activateBtn.disabled = false;
+  };
 
-    const profile = truckQRProfiles[code];
+  const claimRoute = async (truckId) => {
+    const session = ensureSession();
+    if (!session) return;
+    const res = await postJSON("/api/routes/claim", { worker: session.user, truck_id: truckId });
+    if (!res.ok) {
+      flash(res.error || "No se pudo activar la ruta");
+      return;
+    }
+    saveSession("activeRouteId", res.route?.id || null);
+    flash(`Ruta ${res.route?.id || ""} activada`);
+    window.location.href = "/destino";
+  };
 
-    if (!profile) return;
+  if (qrTruckSelect) {
+    qrTruckSelect.innerHTML =
+      `<option value="">Selecciona QR</option>` +
+      planned.map((r) => `<option value="${r.truck_id}">${r.truck_id}</option>`).join("");
+    qrTruckSelect.onchange = (e) => {
+      const truckId = e.target.value;
+      if (!truckId) {
+        if (selectedTruckBox) selectedTruckBox.textContent = "Escanea un QR o elige un cami&oacute;n.";
+        if (activateBtn) activateBtn.disabled = true;
+        return;
+      }
+      updateSelected(truckId);
+      claimRoute(truckId);
+    };
+  }
 
-    if (truckSelect) truckSelect.value = profile.truck_id;
-
-    if (productInput) productInput.value = profile.product_type;
-
-    if (loadInput) loadInput.value = profile.load_l;
-
-    if (originInput) originInput.value = state.warehouse?.name || originInput.value;
-
-    flash(`QR del camion ${profile.truck_id} escaneado`);
-
+  activateBtn?.addEventListener("click", () => {
+    const truckId = qrTruckSelect?.value;
+    if (truckId) claimRoute(truckId);
   });
 
   const pendingScan = consumePendingScan();
@@ -2497,79 +2504,10 @@ async function initSalida() {
     qrTruckSelect.value = pendingScan.id;
     qrTruckSelect.dispatchEvent(new Event("change"));
     flash(`QR de camion ${pendingScan.id} aplicado`);
+  } else if (planned.length === 1 && qrTruckSelect) {
+    qrTruckSelect.value = planned[0].truck_id;
+    qrTruckSelect.dispatchEvent(new Event("change"));
   }
-
-
-
-  form?.addEventListener("submit", async (e) => {
-
-    e.preventDefault();
-
-    const session = ensureWorkerSession();
-
-    if (!session) {
-
-      flash("Inicia sesion antes de planificar la ruta.");
-
-      window.openSessionModal?.("worker");
-
-      return;
-
-    }
-
-    const stops = Array.from(destContainer?.children || []).map((row) => ({
-
-      center_id: row.querySelector(".center-select")?.value,
-
-      tank_id: row.querySelector(".tank-select")?.value,
-
-      liters: Number(row.querySelector(".liters-input")?.value) || 0,
-
-      product: row.querySelector(".product-input")?.value,
-
-    }));
-
-    if (!stops.length) {
-
-      flash("Agrega al menos un destino.");
-
-      return;
-
-    }
-
-    const body = {
-
-      worker: session.user,
-
-      truck_id: form.truck_id.value,
-
-      origin: form.origin.value,
-
-      product_type: form.product_type.value,
-
-      load_l: Number(form.load_l.value),
-
-      stops,
-
-    };
-
-    const res = await postJSON("/api/routes/plan", body);
-
-    if (!res.ok) {
-
-      flash(res.error || "Error al crear ruta");
-
-      return;
-
-    }
-
-    saveSession("activeRouteId", res.route.id);
-
-    flash("Ruta creada. Ve al paso de llegada a destino.");
-
-    window.location.href = "/destino";
-
-  });
 
 }
 
@@ -2623,8 +2561,6 @@ function buildRouteView(route, centers) {
     </div>
 
     <div class="stack">
-
-      ${arrival ? "" : `<button class="btn" id="btn-arrive-stop">Marcar llegada</button>`}
 
       <form id="complete-stop-form" class="stack destination-item">
 
@@ -2793,30 +2729,6 @@ async function initDestino() {
 
 
 
-    const arriveBtn = document.getElementById("btn-arrive-stop");
-
-    arriveBtn?.addEventListener("click", async () => {
-
-      if (!session) {
-
-        flash("Inicia sesion para registrar llegada.");
-
-        window.openSessionModal?.("worker");
-
-        return;
-
-      }
-
-      const res = await postJSON("/api/routes/arrive", { route_id: route.id });
-
-      flash(res.ok ? "Llegada marcada" : res.error || "Error");
-
-      load();
-
-    });
-
-
-
     const form = document.getElementById("complete-stop-form");
 
     form?.addEventListener("submit", async (e) => {
@@ -2927,25 +2839,7 @@ function buildArrivalView(route) {
 
     </div>
 
-    <form id="arrive-warehouse-form" class="stack">
-
-      <label>
-
-        Descarga exitosa
-
-        <select name="success">
-
-          <option value="true">Si</option>
-
-          <option value="false">No, incidencias</option>
-
-        </select>
-
-      </label>
-
-      <button class="btn" type="submit">Marcar llegada a almacen</button>
-
-    </form>
+    <div class="chip muted">Escanea el QR del almac&eacute;n para cerrar la ruta.</div>
 
   `;
 
@@ -3028,42 +2922,6 @@ async function initLlegada() {
       await handleWarehouseQR();
       return;
     }
-
-    const form = document.getElementById("arrive-warehouse-form");
-
-    form?.addEventListener("submit", async (e) => {
-
-      e.preventDefault();
-
-      if (!session) {
-
-        flash("Inicia sesion para cerrar la ruta.");
-
-        window.openSessionModal?.("worker");
-
-        return;
-
-      }
-
-      const success = form.success.value === "true";
-
-      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success });
-
-      flash(res.ok ? "Ruta cerrada" : res.error || "Error");
-
-      if (res.ok) {
-
-        saveSession("activeRouteId", null);
-
-        setTimeout(() => (window.location.href = "/"), 800);
-
-      } else {
-
-        load();
-
-      }
-
-    });
 
   }
 

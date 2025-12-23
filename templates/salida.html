@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Salida de almac&eacute;n - Arbolani</title>
+    <title>Salida por QR - Arbolani</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -17,55 +17,29 @@
       <div class="panel step-card">
         <div class="panel-head">
           <div>
-            <div class="caps">Paso 1</div>
-            <h2>Salida</h2>
+            <div class="caps">Salida</div>
+            <h2>Activa la ruta con QR</h2>
+            <p class="muted small">Escanea el cami&oacute;n asignado y activa la ruta planificada.</p>
           </div>
           <div id="session-worker" class="chip muted"></div>
         </div>
 
-        <form id="plan-route-form" class="step-grid">
-          <div class="mini-panel">
-            <div class="row spaced">
+        <div class="stack mini-panel">
+          <div class="row spaced">
+            <div>
               <div class="caps">QR cami&oacute;n</div>
-              <select id="qr-truck-select" class="mini-select">
-                <option value="">Selecciona QR</option>
-                <option value="TR-01">TR-01</option>
-                <option value="TR-02">TR-02</option>
-                <option value="TR-03">TR-03</option>
-              </select>
+              <p class="muted tiny">Al leer el QR se reclama la ruta de ese cami&oacute;n.</p>
             </div>
-            <div class="form-grid">
-              <label>
-                Camion
-                <select name="truck_id" id="truck-select"></select>
-              </label>
-              <label>
-                Origen
-                <input name="origin" id="origin-input" placeholder="Almacen" />
-              </label>
-              <label>
-                Producto
-                <input name="product_type" id="product-type" placeholder="NPK, correctores, etc." />
-              </label>
-              <label>
-                Litros carga
-                <input type="number" name="load_l" id="load-input" min="0" step="100" value="6000" required />
-              </label>
-            </div>
+            <select id="qr-truck-select" class="mini-select">
+              <option value="">Selecciona QR</option>
+              <option value="TR-01">TR-01</option>
+              <option value="TR-02">TR-02</option>
+              <option value="TR-03">TR-03</option>
+            </select>
           </div>
-
-          <div class="mini-panel">
-            <div class="row spaced">
-              <div class="caps">Destinos</div>
-              <button class="mini-btn" type="button" id="add-destination">Agregar</button>
-            </div>
-            <div id="destinations" class="destination-list"></div>
-            <div class="form-actions">
-              <button class="btn" type="submit">Crear ruta</button>
-              <button class="btn secondary" type="button" onclick="window.location.href='/'">Inicio</button>
-            </div>
-          </div>
-        </form>
+          <div id="selected-truck" class="mini-card muted">Escanea un QR o elige un cami&oacute;n.</div>
+          <button class="btn" id="btn-activate-truck" type="button" disabled>Activar ruta</button>
+        </div>
       </div>
 
       <div class="split">
