@@ -446,13 +446,26 @@ def _tank_deficit(tank: Dict) -> int:
     return max(tank.get("capacity_l", 0) - tank.get("current_l", 0), 0)
 
 
-def _collect_urgent_centers():
+def _reserved_tank_pairs():
+    pairs = set()
+    for r in active_routes:
+        if r.get("status") == "finalizada":
+            continue
+        for stop in r.get("stops", []):
+            pairs.add((stop.get("center_id"), stop.get("tank_id")))
+    return pairs
+
+
+def _collect_urgent_centers(reserved: Optional[set] = None):
+    reserved = reserved or set()
     urgent = []
     for center in centers:
         urgent_tanks = []
         for tank in center["tanks"]:
             pct, status, runout_eta, hours_left = _compute_tank_status(tank)
             if pct <= 0.2:
+                if (center["id"], tank["id"]) in reserved:
+                    continue
                 urgent_tanks.append(
                     {
                         "id": tank["id"],
