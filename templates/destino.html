@@ -17,23 +17,17 @@
       <div class="panel step-card">
         <div class="panel-head">
           <div>
-            <div class="caps">Paso 2</div>
-            <h2>Llegada a destino</h2>
-            <p class="muted">Escanea o marca llegada y descarga.</p>
+            <div class="caps">Destino</div>
+            <h2>Llegada por QR</h2>
+            <p class="muted">Escanea el QR del centro actual. La llegada se marca sola.</p>
           </div>
           <div id="session-worker" class="chip muted"></div>
         </div>
 
-        <div class="step-grid">
-          <div class="mini-panel">
-            <div class="row spaced">
-              <div class="caps">QR centro</div>
-              <select id="qr-center-select" class="mini-select">
-                <option value="">Selecciona QR</option>
-              </select>
-            </div>
-            <div id="route-container" class="stack gap"></div>
-          </div>
+        <div class="mini-panel">
+          <div class="caps">QR centro</div>
+          <p class="muted tiny">Lee el QR del centro/tanque para marcar llegada.</p>
+          <div id="route-container" class="stack gap"></div>
         </div>
       </div>
 

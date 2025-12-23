@@ -1437,6 +1437,11 @@ function renderUrgentPlanner(state) {
   const btn = document.getElementById("btn-generate-urgent");
   if (!centerBox || !truckBox) return;
   const urgent = state.urgent_centers || [];
+  const assignedCenters = new Set(
+    (state.routes || [])
+      .filter((r) => r.status && r.status !== "finalizada")
+      .flatMap((r) => r.stops?.map((s) => s.center_id) || [])
+  );
   const availableTrucks = (state.trucks || []).filter((t) => t.status === "parked" && !t.route_id);
   if (!urgent.length) {
     centerBox.innerHTML = `<div class="empty-card">Sin dep&oacute;sitos al 20% o menos.</div>`;
@@ -1454,8 +1459,9 @@ function renderUrgentPlanner(state) {
           .sort((a, b) => a - b)[0];
         const eta = etaMs && Number.isFinite(etaMs) ? new Date(etaMs) : null;
         const topTanks = c.tanks.slice().sort((a, b) => a.percentage - b.percentage).slice(0, 2);
+        const assigned = assignedCenters.has(c.center_id);
         return `
-          <div class="refill-card bad tight">
+          <div class="refill-card ${assigned ? "ok" : "bad"} tight">
             <div class="row spaced">
               <div>
                 <div class="muted tiny">${c.center_name}</div>
@@ -1463,8 +1469,8 @@ function renderUrgentPlanner(state) {
               </div>
               <span class="pill tiny">${c.tanks.length} deps</span>
             </div>
-            <div class="muted small">Litros urgentes: ${formatLiters(c.total_deficit)}</div>
-            <div class="muted tiny">Reponer antes de ${eta ? formatEta(eta) : "n/d"}</div>
+            <div class="muted small">${assigned ? "Asociada a ruta" : `Litros urgentes: ${formatLiters(c.total_deficit)}`}</div>
+            <div class="muted tiny">${assigned ? "En reparto" : `Reponer antes de ${eta ? formatEta(eta) : "n/d"}`}</div>
             <div class="mini-row">
               ${topTanks
                 .map(

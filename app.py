@@ -653,7 +653,12 @@ def _build_auto_route_for_truck(truck: Dict, center_batch: List[Dict], worker: O
 
 
 def _auto_plan_urgent_routes():
-    urgent = sorted(_collect_urgent_centers(), key=lambda c: (c.get("urgent_count", 0), c["total_deficit"]), reverse=True)
+    reserved = _reserved_tank_pairs()
+    urgent = sorted(
+        _collect_urgent_centers(reserved),
+        key=lambda c: (c.get("urgent_count", 0), c["total_deficit"]),
+        reverse=True,
+    )
     available_trucks = [
         t for t in trucks if t["status"] == "parked" and not t.get("route_id") and t.get("capacity_l")
     ]
@@ -696,6 +701,8 @@ def _auto_plan_urgent_routes():
         tr["eta_minutes"] = None
         planned_routes.append(route)
         active_routes.append(route)
+        for stop in route.get("stops", []):
+            reserved.add((stop.get("center_id"), stop.get("tank_id")))
     return planned_routes
 
 
