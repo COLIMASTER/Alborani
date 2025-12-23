@@ -295,7 +295,7 @@ def _ensure_qr_codes(base_url: str):
     for target in _qr_targets(base_url):
         img_path = out_dir / target["filename"]
         img = qrcode.make(target["url"])
-        img.save(img_path)
+        img.save(str(img_path))
 
 
 def _now():
