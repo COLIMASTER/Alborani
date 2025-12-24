@@ -295,6 +295,8 @@ def _ensure_state_table(conn):
 
 def _serialize_for_store():
     return {
+        "warehouse": WAREHOUSE,
+        "centers": centers,
         "trucks": trucks,
         "active_routes": active_routes,
         "route_history": route_history,
@@ -339,6 +341,11 @@ def _load_state_from_db():
     if restored.get("trucks"):
         trucks.clear()
         trucks.extend(restored["trucks"])
+    if restored.get("centers"):
+        centers.clear()
+        centers.extend(restored["centers"])
+    if restored.get("warehouse"):
+        WAREHOUSE.update(restored["warehouse"])
     if restored.get("active_routes") is not None:
         active_routes.clear()
         active_routes.extend(restored.get("active_routes", []))
