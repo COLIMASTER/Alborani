@@ -2054,8 +2054,18 @@ function renderMap(state, targetId = "map") {
       iconSize: [52, 36],
       iconAnchor: [26, 18],
     });
-    const lat = tr.position?.lat || state.warehouse.lat;
-    const lon = tr.position?.lon || state.warehouse.lon;
+    let lat = tr.position?.lat;
+    let lon = tr.position?.lon;
+    if ((lat === undefined || lon === undefined) && tr.destination?.center_id) {
+      const center = state.centers.find((c) => c.id === tr.destination.center_id);
+      const tank = center?.tanks?.find((t) => t.id === tr.destination.tank_id);
+      lat = tank?.location?.lat ?? center?.location?.lat;
+      lon = tank?.location?.lon ?? center?.location?.lon;
+    }
+    if (lat === undefined || lon === undefined) {
+      lat = state.warehouse.lat;
+      lon = state.warehouse.lon;
+    }
     if (!truckMarkers[tr.id]) {
       truckMarkers[tr.id] = L.marker([lat, lon], { icon }).addTo(mapObj);
     } else {
