@@ -1,12 +1,19 @@
 ﻿import math
 import random
+import json
 from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import os
 from pathlib import Path
 import qrcode
+from qrcode.image.pure import PyPNGImage
 from flask import Flask, jsonify, render_template, request
+
+try:
+    import psycopg2
+except Exception:
+    psycopg2 = None
 
 app = Flask(__name__)
 
@@ -20,6 +27,8 @@ WORKERS = {
 }
 
 ADMIN = {"username": "admin", "password": "123"}
+
+DB_URL = os.environ.get("DATABASE_URL")
 
 
 def _make_tank(prefix: str, idx: int, base_lat: float, base_lon: float, product: str):
@@ -268,6 +277,105 @@ def _get_base_url() -> str:
     ).rstrip("/")
 
 
+def _db_enabled():
+    return DB_URL and psycopg2 is not None
+
+
+def _json_default(obj):
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
+
+def _ensure_state_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("create table if not exists app_state (key text primary key, data jsonb)")
+    conn.commit()
+
+
+def _serialize_for_store():
+    return {
+        "trucks": trucks,
+        "active_routes": active_routes,
+        "route_history": route_history,
+        "delivery_log": delivery_log,
+    }
+
+
+def _convert_dates(obj):
+    if isinstance(obj, str):
+        try:
+            return datetime.fromisoformat(obj)
+        except Exception:
+            return obj
+    if isinstance(obj, list):
+        return [_convert_dates(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _convert_dates(v) for k, v in obj.items()}
+    return obj
+
+
+def _load_state_from_db():
+    if not _db_enabled():
+        return
+    try:
+        conn = psycopg2.connect(DB_URL, sslmode="require")
+        _ensure_state_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("select data from app_state where key=%s", ("state",))
+            row = cur.fetchone()
+            if not row:
+                return
+            data = row[0]
+    except Exception as exc:  # noqa: BLE001
+        print("No se pudo cargar estado desde DB:", exc)
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    restored = _convert_dates(data)
+    if restored.get("trucks"):
+        trucks.clear()
+        trucks.extend(restored["trucks"])
+    if restored.get("active_routes") is not None:
+        active_routes.clear()
+        active_routes.extend(restored.get("active_routes", []))
+    if restored.get("route_history") is not None:
+        route_history.clear()
+        route_history.extend(restored.get("route_history", []))
+    if restored.get("delivery_log") is not None:
+        delivery_log.clear()
+        delivery_log.extend(restored.get("delivery_log", []))
+
+
+def _save_state():
+    if not _db_enabled():
+        return
+    try:
+        conn = psycopg2.connect(DB_URL, sslmode="require")
+        _ensure_state_table(conn)
+        payload = json.dumps(_serialize_for_store(), default=_json_default)
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                insert into app_state(key, data)
+                values (%s, %s::jsonb)
+                on conflict (key) do update set data = EXCLUDED.data
+                """,
+                ("state", payload),
+            )
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001
+        print("No se pudo guardar estado en DB:", exc)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _qr_targets(base_url: str):
     targets = []
     for tr in trucks:
@@ -294,8 +402,9 @@ def _ensure_qr_codes(base_url: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     for target in _qr_targets(base_url):
         img_path = out_dir / target["filename"]
-        img = qrcode.make(target["url"])
-        img.save(str(img_path))
+        img = qrcode.make(target["url"], image_factory=PyPNGImage)
+        with open(img_path, "wb") as f:
+            img.save(f)
 
 
 def _now():
@@ -376,7 +485,10 @@ def _seed_history():
     )
 
 
-_seed_history()
+_load_state_from_db()
+if not route_history:
+    _seed_history()
+_save_state()
 _ensure_qr_codes(_get_base_url())
 
 
@@ -934,6 +1046,7 @@ def api_login():
 @app.route("/api/simulate-drain", methods=["POST"])
 def api_simulate_drain():
     _simulate_drain()
+    _save_state()
     return jsonify({"ok": True, "message": "Consumo simulado"}), 200
 
 
@@ -942,6 +1055,7 @@ def api_admin_auto_plan():
     planned = _auto_plan_urgent_routes()
     if not planned:
         return jsonify({"ok": False, "error": "Sin centros urgentes o camiones libres"}), 400
+    _save_state()
     return jsonify({"ok": True, "created": len(planned), "routes": _serialize_routes(planned)})
 
 
@@ -992,6 +1106,7 @@ def api_claim_route():
         "tank_id": dest_tank["id"] if dest_tank else first_stop["tank_id"],
     }
     _set_leg(route, truck, leg_origin, leg_dest, f"Hacia {dest_center['name']}" if dest_center else "Primer destino")
+    _save_state()
     return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
 
 
@@ -1085,6 +1200,7 @@ def api_plan_route():
     truck["current_load_l"] = load_l
     truck["notes"] = f"Salida de {worker} con {load_l} L"
 
+    _save_state()
     return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
 
 
@@ -1120,6 +1236,7 @@ def api_arrive_stop():
             }
     route["status"] = "en_destino"
     route["current_leg"] = None
+    _save_state()
     return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
 
 
@@ -1207,6 +1324,7 @@ def api_complete_stop():
             truck["notes"] = "Volviendo a almacen"
             _set_leg(route, truck, tank["location"] if tank else WAREHOUSE, WAREHOUSE, "Retorno")
 
+    _save_state()
     return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
 
 
@@ -1242,6 +1360,7 @@ def api_arrive_warehouse():
     # mover ruta al historial
     active_routes.remove(route)
     route_history.insert(0, route)
+    _save_state()
     return jsonify({"ok": True, "message": "Ruta cerrada", "route": _serialize_routes([route])[0]})
 
 
