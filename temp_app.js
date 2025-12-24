@@ -343,7 +343,6 @@ function consumePendingScan() {
 }
 
 
-
 function renderWorkerAssignments(state) {
   const box = document.getElementById("worker-assignment");
   if (!box) return;
@@ -370,13 +369,10 @@ function renderWorkerAssignments(state) {
   const card = document.createElement("div");
   card.className = "route-card emphasis";
   const status = routeStatusLabel[assigned.status] || assigned.status;
-  const nextStop = assigned.stops?.[assigned.current_stop_idx || 0];
-  const nextCenter = state.centers?.find((c) => c.id === nextStop?.center_id);
-
   card.innerHTML = `
     <div class="row spaced">
       <div>
-        <strong>${assigned.truck_id} -> ${assigned.id}</strong>
+        <strong>${assigned.truck_id} · ${assigned.id}</strong>
         <div class="muted small">${centerSummary}</div>
       </div>
       <span class="status ${assigned.status === "planificada" ? "warn" : "ok"}">${status}</span>
@@ -391,17 +387,49 @@ function renderWorkerAssignments(state) {
           const c = state.centers?.find((cc) => cc.id === s.center_id);
           const centerName = c ? c.name : s.center_id;
           const tankLabel = c?.tanks?.find((t) => t.id === s.tank_id)?.label || s.tank_id;
-          return `<span class="mini-tag">${centerName} -> ${tankLabel}</span>`;
+          return `<span class="mini-tag">${centerName} · ${tankLabel}</span>`;
         })
         .join("")}
     </div>
     ${
       assigned.status === "planificada"
-        ? `<div class="muted small">Dir&iacute;gete al cami&oacute;n ${assigned.truck_id} y escanea su QR para activar la ruta.</div>`
-        : `<div class="muted small">Ruta en curso. Pr&oacute;ximo destino: ${nextCenter ? nextCenter.name : nextStop?.center_id || "pendiente"}.</div>`
+        ? `<label class="small qr-label">
+            Escanea el QR del camion ${assigned.truck_id} para arrancar la ruta
+            <select class="mini-select claim-qr">
+              <option value="">Selecciona QR</option>
+              <option value="${assigned.truck_id}">${assigned.truck_id}</option>
+              ${state.trucks
+                .filter((t) => t.id !== assigned.truck_id)
+                .map((t) => `<option value="${t.id}">${t.id}</option>`)
+                .join("")}
+            </select>
+          </label>
+          <button class="btn" type="button" data-claim="${assigned.truck_id}">Activar ruta</button>
+          <div class="muted tiny">Tras activarla, ve al paso 2 y marca llegada al primer centro.</div>`
+        : `<div class="muted small">Ruta en curso. Ve al paso 2.</div>`
     }
   `;
   box.appendChild(card);
+  const claimBtn = card.querySelector("button[data-claim]");
+  claimBtn?.addEventListener("click", async () => {
+    const scanned = card.querySelector(".claim-qr")?.value;
+    if (!scanned) {
+      flash("Escanea o selecciona el QR del camion.");
+      return;
+    }
+    if (scanned !== assigned.truck_id) {
+      flash("Ese QR no corresponde a este camion.");
+      return;
+    }
+    const res = await postJSON("/api/routes/claim", { worker: session.user, truck_id: assigned.truck_id });
+    if (!res.ok) {
+      flash(res.error || "No se pudo activar la ruta");
+      return;
+    }
+    saveSession("activeRouteId", res.route?.id || null);
+    flash("Ruta activada. Ve al paso 2 para comenzar.");
+    window.location.href = "/destino";
+  });
 }
 
 
@@ -2402,7 +2430,6 @@ async function initCenterPage() {
 
 
 
-
 async function initSalida() {
 
   refreshSessionBadges();
@@ -2417,10 +2444,11 @@ async function initSalida() {
 
   const planned = (state.routes || []).filter((r) => r.status === "planificada");
 
+  const qrTruckSelect = null;
   const selectedTruckBox = document.getElementById("selected-truck");
   const activateBtn = document.getElementById("btn-activate-truck");
   let scannedTruck = null;
-  if (selectedTruckBox) selectedTruckBox.textContent = "Dir\u00edgete al cami\u00f3n asignado y escanea su QR para comenzar.";
+  if (selectedTruckBox) selectedTruckBox.textContent = "Escanea un QR de cami\u00f3n para continuar.";
 
   const ensureSession = () => {
     const session = ensureWorkerSession();
@@ -2434,8 +2462,7 @@ async function initSalida() {
   const updateSelected = (truckId) => {
     const route = planned.find((r) => r.truck_id === truckId);
     if (!route) {
-      if (selectedTruckBox)
-        selectedTruckBox.innerHTML = `<div class="muted">No hay ruta planificada para este cami&oacute;n.</div>`;
+      if (selectedTruckBox) selectedTruckBox.innerHTML = `<div class="muted">No hay ruta planificada para este cami&oacute;n.</div>`;
       if (activateBtn) activateBtn.disabled = true;
       return;
     }
@@ -2461,7 +2488,7 @@ async function initSalida() {
     if (!res.ok) {
       const mine = planned.find((r) => r.worker === session.user);
       if (mine) {
-        flash(res.error || `Ese QR no es tu cami&oacute;n. Dir&iacute;gete a ${mine.truck_id}.`);
+        flash(res.error || `Ese QR no es tu cami\u00f3n. Dir\u00edgete a ${mine.truck_id}.`);
       } else {
         flash(res.error || "No se pudo activar la ruta");
       }
@@ -2472,33 +2499,37 @@ async function initSalida() {
     window.location.href = "/destino";
   };
 
-  const applyScan = (truckId) => {
-    scannedTruck = truckId;
-    updateSelected(truckId);
-    if (activateBtn) activateBtn.disabled = false;
-  };
+  if (qrTruckSelect) {
+    qrTruckSelect.innerHTML =
+      `<option value="">Selecciona QR</option>` +
+      planned.map((r) => `<option value="${r.truck_id}">${r.truck_id}</option>`).join("");
+    qrTruckSelect.onchange = (e) => {
+      const truckId = e.target.value;
+      if (!truckId) {
+        if (selectedTruckBox) selectedTruckBox.textContent = "Escanea un QR o elige un cami&oacute;n.";
+        if (activateBtn) activateBtn.disabled = true;
+        return;
+      }
+      updateSelected(truckId);
+      claimRoute(truckId);
+    };
+  }
 
   activateBtn?.addEventListener("click", () => {
-    if (!scannedTruck) {
-      flash("Escanea el QR del cami&oacute;n asignado para activar la ruta.");
-      return;
-    }
-    claimRoute(scannedTruck);
+    const truckId = qrTruckSelect?.value;
+    if (truckId) claimRoute(truckId);
   });
 
   const pendingScan = consumePendingScan();
-  if (pendingScan?.type === "truck") {
-    applyScan(pendingScan.id);
-    await claimRoute(pendingScan.id);
-    return;
+  if (pendingScan?.type === "truck" && qrTruckSelect) {
+    qrTruckSelect.value = pendingScan.id;
+    qrTruckSelect.dispatchEvent(new Event("change"));
+    flash(`QR de camion ${pendingScan.id} aplicado`);
+  } else if (planned.length === 1 && qrTruckSelect) {
+    qrTruckSelect.value = planned[0].truck_id;
+    qrTruckSelect.dispatchEvent(new Event("change"));
   }
 
-  const session = ensureWorkerSession();
-  const mine = planned.find((r) => r.worker === session?.user);
-  if (mine && selectedTruckBox) {
-    selectedTruckBox.innerHTML = `<div class="muted">Dir&iacute;gete al cami&oacute;n ${mine.truck_id} y escanea su QR para activar.</div>`;
-  }
-  if (activateBtn) activateBtn.disabled = true;
 }
 
 
@@ -2612,14 +2643,13 @@ function buildRouteView(route, centers) {
 
 
 
-
 async function initDestino() {
 
   refreshSessionBadges();
 
   if (!requireWorkerSession()) return;
 
-  let pendingScan = consumePendingScan();
+
 
   async function load() {
 
@@ -2645,13 +2675,84 @@ async function initDestino() {
 
     if (!container) return;
 
+    const qrSelect = document.getElementById("qr-center-select");
+
+    if (qrSelect && !route) {
+
+      qrSelect.innerHTML = `<option value="">Sin ruta activa</option>`;
+
+      qrSelect.disabled = true;
+
+    }
+
     container.innerHTML = buildRouteView(route, state.centers);
 
     if (!route) return;
 
+
+
+    if (qrSelect) qrSelect.disabled = false;
+
+    if (qrSelect) {
+
+      qrSelect.innerHTML = `<option value="">Selecciona QR del centro</option>`;
+
+      qrSelect.disabled = false;
+
+      route.stops.forEach((s) => {
+
+        const center = state.centers.find((c) => c.id === s.center_id);
+
+        const label = `${center ? center.name : s.center_id} / ${s.tank_id}`;
+
+        qrSelect.innerHTML += `<option value="${s.center_id}|${s.tank_id}">${label}</option>`;
+
+      });
+
+      qrSelect.onchange = async () => {
+
+        const value = qrSelect.value;
+
+        if (!value) return;
+
+        const [centerId, tankId] = value.split("|");
+
+        const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
+
+        if (currentStop.center_id !== centerId || currentStop.tank_id !== tankId) {
+
+          flash("Ese QR no corresponde al destino actual.");
+
+          qrSelect.value = "";
+
+          return;
+
+        }
+
+        const res = await postJSON("/api/routes/arrive", { route_id: route.id });
+
+        flash(res.ok ? "Llegada marcada por QR" : res.error || "Error");
+
+        qrSelect.value = "";
+
+        load();
+
+      };
+
+      const pendingScan = consumePendingScan();
+      if (pendingScan?.type === "center") {
+        const optionValue = `${pendingScan.center_id}|${pendingScan.tank_id || ""}`;
+        qrSelect.value = optionValue;
+        qrSelect.dispatchEvent(new Event("change"));
+      }
+
+    }
+
+
+
     const form = document.getElementById("complete-stop-form");
 
-    if (form) form.onsubmit = async (e) => {
+    form?.addEventListener("submit", async (e) => {
 
       e.preventDefault();
 
@@ -2693,37 +2794,75 @@ async function initDestino() {
 
       }
 
-    };
+    });
 
-    const applyCenterScan = async (scan) => {
-      const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
-      if (!currentStop) {
-        flash("Ruta sin paradas pendientes.");
-        return;
-      }
-      if (scan.center_id !== currentStop.center_id) {
-        const target = state.centers.find((c) => c.id === currentStop.center_id);
-        flash(`Ese QR no corresponde al destino actual. Ve a ${target ? target.name : currentStop.center_id}.`);
-        return;
-      }
-      const res = await postJSON("/api/routes/arrive", { route_id: route.id });
-      flash(res.ok ? "Llegada marcada por QR" : res.error || "Error");
+
+
+    const ctaArrival = document.getElementById("cta-arrival");
+
+    ctaArrival?.addEventListener("click", async () => {
+
+      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success: true });
+
+      flash(res.ok ? "Ruta cerrada" : res.error || "Error");
+
       if (res.ok) {
-        saveSession("activeRouteId", route.id);
-        await load();
-      }
-    };
 
-    if (pendingScan?.type === "center") {
-      const scanCopy = pendingScan;
-      pendingScan = null;
-      await applyCenterScan(scanCopy);
-      return;
-    }
+        saveSession("activeRouteId", null);
+
+        setTimeout(() => (window.location.href = "/"), 800);
+
+      } else {
+
+        load();
+
+      }
+
+    });
 
   }
 
+
+
   load();
+
+  setInterval(load, 60000);
+
+}
+
+
+
+function buildArrivalView(route) {
+
+  if (!route) return `<div class="muted">No hay ruta en retorno. Finaliza un destino primero.</div>`;
+
+  if (route.status !== "regresando" && route.status !== "finalizada") {
+
+    return `<div class="muted">Aun hay destinos pendientes. Vuelve al paso de destino.</div>`;
+
+  }
+
+  if (route.status === "finalizada") {
+
+    return `<div class="chip">Ruta ${route.id} ya cerrada.</div>`;
+
+  }
+
+  return `
+
+    <div class="route-card">
+
+      <h4>${route.id} - ${route.truck_id}</h4>
+
+      <div class="tank-meta"><span>Litros totales</span><span>${formatLiters(route.total_delivered)}</span></div>
+
+      <div class="tank-meta"><span>Destinos</span><span>${route.stops.length}</span></div>
+
+    </div>
+
+    <div class="chip muted">Escanea el QR del almac&eacute;n para cerrar la ruta.</div>
+
+  `;
 
 }
 
@@ -2733,12 +2872,6 @@ async function initScan() {
   const status = document.getElementById("scan-status");
 
   const params = new URLSearchParams(window.location.search);
-
-  const adminSession = getSession("adminSession");
-  if (adminSession) {
-    if (status) status.textContent = "Sesion de admin: escaneo ignorado.";
-    return;
-  }
 
   const payload = {
     type: params.get("type"),
@@ -2763,6 +2896,7 @@ async function initScan() {
 
   setTimeout(() => (window.location.href = dest), 200);
 }
+
 
 
 async function initLlegada() {
@@ -3287,3 +3421,4 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "scan") initScan();
 
 });
+
