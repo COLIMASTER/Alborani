@@ -151,6 +151,11 @@ img {
   margin: 14px 0 6px;
 }
 
+.toolbar .btn.ghost {
+  border: 1px solid var(--border);
+  background: #ffffff;
+}
+
 .pill {
   display: inline-flex;
   padding: 7px 12px;
