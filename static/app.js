@@ -2880,6 +2880,11 @@ async function initDestino() {
     if (pendingScan?.type === "center") {
       const scanCopy = pendingScan;
       pendingScan = null;
+      const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
+      if (currentStop?.arrival_at) {
+        // Ya marcado, no repetir
+        return;
+      }
       await applyCenterScan(scanCopy);
       return;
     }
@@ -3034,8 +3039,10 @@ async function initLlegada() {
     if (!route || route.status !== "regresando") return;
 
     if (pendingScan?.type === "warehouse") {
+      const scanCopy = pendingScan;
       pendingScan = null;
-      await handleWarehouseQR(pendingScan);
+      if (route.status === "finalizada") return;
+      await handleWarehouseQR(scanCopy);
       return;
     }
 
@@ -3127,7 +3134,32 @@ async function initWorkerLogin() {
 
   const existing = ensureWorkerSession();
   if (existing) {
-    window.location.href = "/salida";
+    // Si ya tiene sesion, reencaminar segun un QR pendiente
+    const pending = consumePendingScan();
+    if (pending?.type === "center") {
+      try {
+        localStorage.setItem("pendingScan", JSON.stringify(pending));
+      } catch (_e) {
+        /* ignore */
+      }
+      window.location.href = "/destino";
+    } else if (pending?.type === "warehouse") {
+      try {
+        localStorage.setItem("pendingScan", JSON.stringify(pending));
+      } catch (_e) {
+        /* ignore */
+      }
+      window.location.href = "/llegada";
+    } else {
+      if (pending) {
+        try {
+          localStorage.setItem("pendingScan", JSON.stringify(pending));
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+      window.location.href = "/salida";
+    }
     return;
   }
 
@@ -3155,7 +3187,33 @@ async function initWorkerLogin() {
 
     flash("Sesion iniciada");
 
-    window.location.href = "/salida";
+    const pending = consumePendingScan();
+    if (pending) {
+      try {
+        localStorage.setItem("pendingScan", JSON.stringify(pending));
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+
+    // Tras login, si hay una ruta activa del operario, guardarla en sesion
+    try {
+      const state = await fetchState();
+      const active = (state.routes || []).find((r) => r.worker === body.username && r.status !== "finalizada");
+      if (active) saveSession("activeRouteId", active.id);
+    } catch (_e) {
+      /* ignore */
+    }
+
+    if (pending?.type === "center") {
+      window.location.href = "/destino";
+    } else if (pending?.type === "warehouse") {
+      window.location.href = "/llegada";
+    } else if (pending?.type === "truck") {
+      window.location.href = "/salida";
+    } else {
+      window.location.href = "/salida";
+    }
 
   });
 
