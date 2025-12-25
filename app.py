@@ -383,13 +383,13 @@ def _save_state():
             pass
 
 
-def _qr_targets(base_url: str):
+def _qr_targets(_base_url: str):
     targets = []
     for tr in trucks:
         targets.append(
             {
                 "filename": f"truck_{tr['id']}.png",
-                "url": f"{base_url}/scan?type=truck&id={tr['id']}",
+                "payload": json.dumps({"type": "truck", "truck_id": tr["id"]}),
             }
         )
     for center in centers:
@@ -397,10 +397,12 @@ def _qr_targets(base_url: str):
             targets.append(
                 {
                     "filename": f"center_{center['id']}_{tank['id']}.png",
-                    "url": f"{base_url}/scan?type=center&center_id={center['id']}&tank_id={tank['id']}",
+                    "payload": json.dumps(
+                        {"type": "center", "center_id": center["id"], "tank_id": tank["id"]}
+                    ),
                 }
             )
-    targets.append({"filename": "warehouse_main.png", "url": f"{base_url}/scan?type=warehouse&id=main"})
+    targets.append({"filename": "warehouse_main.png", "payload": json.dumps({"type": "warehouse", "id": "main"})})
     return targets
 
 
@@ -409,7 +411,10 @@ def _ensure_qr_codes(base_url: str):
     out_dir.mkdir(parents=True, exist_ok=True)
     for target in _qr_targets(base_url):
         img_path = out_dir / target["filename"]
-        img = qrcode.make(target["url"], image_factory=PyPNGImage)
+        content = target.get("payload") or target.get("url")
+        if not content:
+            continue
+        img = qrcode.make(content, image_factory=PyPNGImage)
         with open(img_path, "wb") as f:
             img.save(f)
 
