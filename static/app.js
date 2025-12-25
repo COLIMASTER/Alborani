@@ -15,40 +15,7 @@ let selectedCenterId = null;
 const logFilters = { range: "24h", worker: "all", center: "all" };
 
 function ensureGlobalQRButton() {
-  let fab = document.getElementById("qr-fab");
-  if (!fab) {
-    fab = document.createElement("button");
-    fab.id = "qr-fab";
-    fab.className = "qr-fab";
-    fab.type = "button";
-    fab.textContent = "Escanear QR";
-    document.body.appendChild(fab);
-  }
-  const session = ensureWorkerSession();
-  fab.style.display = session ? "flex" : "none";
-  fab.onclick = () => {
-    openQRScanner({
-      title: "Escanea QR",
-      helper: "Camiones, centros o almac\u00e9n",
-      onResult: (scan) => {
-        const parsed = scan?.type ? scan : parseQRContent(scan);
-        if (!parsed?.type) {
-          flash("QR no reconocido");
-          return;
-        }
-        try {
-          localStorage.setItem("pendingScan", JSON.stringify(parsed));
-        } catch (_e) {
-          /* ignore */
-        }
-        let dest = "/";
-        if (parsed.type === "truck") dest = "/salida";
-        else if (parsed.type === "center") dest = "/destino";
-        else if (parsed.type === "warehouse") dest = "/llegada";
-        window.location.href = dest;
-      },
-    });
-  };
+  /* QR por URL, sin boton flotante */
 }
 
 function toggleGate(show) {
@@ -382,27 +349,6 @@ function consumePendingScan() {
 function parseQRContent(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
-
-  // JSON payload: {"type":"center","center_id":"...","tank_id":"..."}
-  if (text.startsWith("{")) {
-    try {
-      const data = JSON.parse(text);
-      if (data?.type) return data;
-    } catch (_e) {
-      /* ignore */
-    }
-  }
-
-  // Prefijo ALBO|truck|TR-01
-  const parts = text.split("|").map((p) => p.trim());
-  if (parts.length >= 2 && ["albo", "alborani"].includes(parts[0].toLowerCase())) {
-    const [, type, a, b] = parts;
-    if (type === "truck") return { type: "truck", truck_id: a };
-    if (type === "center") return { type: "center", center_id: a, tank_id: b };
-    if (type === "warehouse") return { type: "warehouse", id: a || "main" };
-  }
-
-  // URL o query heredada
   try {
     const url = new URL(text, window.location.origin);
     const type = url.searchParams.get("type");
@@ -413,132 +359,7 @@ function parseQRContent(raw) {
   } catch (_e) {
     /* ignore */
   }
-
-  // Codigos simples (fallback)
-  if (/^TR-\d+/i.test(text)) return { type: "truck", truck_id: text };
   return null;
-}
-
-function stopQRScanner() {
-  if (!qrScannerWidget) return;
-  try {
-    qrScannerWidget.stream?.getTracks?.().forEach((t) => t.stop());
-  } catch (_e) {
-    /* ignore */
-  }
-  if (qrScannerWidget.raf) cancelAnimationFrame(qrScannerWidget.raf);
-  qrScannerWidget.overlay?.remove?.();
-  qrScannerWidget = null;
-}
-
-async function openQRScanner(options) {
-  const opts = options || {};
-  const { expectedType, onResult } = opts;
-  stopQRScanner();
-  if (!onResult) return;
-
-  const overlay = document.createElement("div");
-  overlay.className = "qr-overlay";
-  overlay.innerHTML = `
-    <div class="qr-box">
-      <div class="row spaced">
-        <div>
-          <div class="caps">${opts.title || "Escanear QR"}</div>
-          <p class="muted tiny">${opts.helper || "Abre la camara y apunta al codigo."}</p>
-        </div>
-        <button class="mini-btn" type="button" data-action="close">Cerrar</button>
-      </div>
-      <div class="qr-video-wrap"><video id="qr-video" playsinline></video></div>
-      <div class="stack">
-        <label class="muted tiny">Si la camara falla, introduce el codigo:</label>
-        <div class="row">
-          <input type="text" id="qr-manual" placeholder="Pega el codigo del QR" />
-          <button class="mini-btn" type="button" data-action="manual">Usar codigo</button>
-        </div>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  const video = overlay.querySelector("#qr-video");
-  const manualInput = overlay.querySelector("#qr-manual");
-  const closeBtn = overlay.querySelector("[data-action='close']");
-  const manualBtn = overlay.querySelector("[data-action='manual']");
-
-  const widget = { overlay, raf: null, stream: null, closed: false };
-  qrScannerWidget = widget;
-
-  const close = () => {
-    if (widget.closed) return;
-    widget.closed = true;
-    stopQRScanner();
-  };
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
-  closeBtn?.addEventListener("click", close);
-
-  const applyRaw = (raw) => {
-    const parsed = parseQRContent(raw);
-    if (!parsed) {
-      flash("Codigo no reconocido. Prueba de nuevo.");
-      return false;
-    }
-    if (expectedType && parsed.type !== expectedType) {
-      flash(`Ese QR es de ${parsed.type || "otro tipo"}. Se espera ${expectedType}.`);
-      return false;
-    }
-    close();
-    onResult(parsed, raw);
-    return true;
-  };
-
-  manualBtn?.addEventListener("click", () => {
-    if (manualInput?.value) applyRaw(manualInput.value);
-  });
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    flash("Tu dispositivo no permite abrir la camara. Introduce el codigo manual.");
-    return;
-  }
-
-  try {
-    widget.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-  } catch (_e) {
-    flash("No se pudo abrir la camara. Verifica permisos.");
-    return;
-  }
-
-  if (video) {
-    video.srcObject = widget.stream;
-    await video.play();
-  }
-
-  const detector = window.BarcodeDetector ? new BarcodeDetector({ formats: ["qr_code"] }) : null;
-  if (!detector) {
-    flash("El navegador no soporta lectura QR automatica. Usa la caja de texto.");
-    try {
-      widget.stream?.getTracks?.().forEach((t) => t.stop());
-    } catch (_e) {
-      /* ignore */
-    }
-    return;
-  }
-
-  const scan = async () => {
-    if (widget.closed) return;
-    try {
-      const codes = await detector.detect(video);
-      if (codes?.length) {
-        const ok = applyRaw(codes[0].rawValue);
-        if (ok) return;
-      }
-    } catch (_e) {
-      /* ignore */
-    }
-    widget.raf = requestAnimationFrame(scan);
-  };
-  scan();
 }
 
 
@@ -2341,31 +2162,6 @@ async function initHome() {
     loadHome();
   });
 
-  const workerScanBtn = document.getElementById("worker-qr-btn");
-  workerScanBtn?.addEventListener("click", () => {
-    openQRScanner({
-      title: "Escanea QR de cami\u00f3n/centro/almac\u00e9n",
-      helper: "La app te llevar\u00e1 al paso correspondiente.",
-      onResult: (scan) => {
-        const parsed = scan?.type ? scan : parseQRContent(scan);
-        if (!parsed?.type) {
-          flash("QR no reconocido");
-          return;
-        }
-        try {
-          localStorage.setItem("pendingScan", JSON.stringify(parsed));
-        } catch (_e) {
-          /* ignore */
-        }
-        let dest = "/";
-        if (parsed.type === "truck") dest = "/salida";
-        else if (parsed.type === "center") dest = "/destino";
-        else if (parsed.type === "warehouse") dest = "/llegada";
-        window.location.href = dest;
-      },
-    });
-  });
-
   ensureGlobalQRButton();
   loadHome();
 
@@ -2706,29 +2502,14 @@ async function initSalida() {
     window.location.href = "/destino";
   };
 
-  const startTruckScan = () => {
-    openQRScanner({
-      title: "Escanea el QR del cami\u00f3n",
-      helper: mine
-        ? `Tienes la ruta ${mine.id} asignada al cami\u00f3n ${mine.truck_id}`
-        : "Apunta al QR f\u00edsico del cami\u00f3n asignado.",
-      expectedType: "truck",
-      onResult: async (scan) => {
-        if (!scan?.truck_id && !scan?.id) {
-          flash("QR de cami\u00f3n incompleto.");
-          return;
-        }
-        await claimRoute(scan.truck_id || scan.id);
-      },
-    });
-  };
-
-  scanBtn?.addEventListener("click", startTruckScan);
+  if (scanBtn) {
+    scanBtn.onclick = () => flash("Escanea el QR f\u00edsico del cami\u00f3n asignado para activar la ruta.");
+    scanBtn.disabled = true;
+  }
 
   const pendingScan = consumePendingScan();
-  const parsedPending = pendingScan?.type ? pendingScan : parseQRContent(pendingScan?.id || pendingScan);
-  if (parsedPending?.type === "truck") {
-    await claimRoute(parsedPending.truck_id || parsedPending.id);
+  if (pendingScan?.type === "truck") {
+    await claimRoute(pendingScan.id || pendingScan.truck_id);
     return;
   }
 
@@ -2788,23 +2569,12 @@ function buildRouteView(route, centers) {
 
 
   const waitingBlock = !arrival
-
-    ? `<div class="chip primary">Paso 2: Dir&iacute;gete a ${center ? center.name : stop?.center_id} y escanea el QR al llegar para marcar la llegada.</div>
-
-       <button class="btn" id="btn-scan-center" type="button">Abrir camara y leer QR</button>`
-
+    ? `<div class="chip primary">Paso 2: Dir&iacute;gete a ${center ? center.name : stop?.center_id} y escanea el QR f\u00edsico al llegar para marcar la llegada.</div>`
     : `<div class="chip muted">Llegada marcada. Completa la descarga y sal.</div>`;
 
-
-
   const returnBlock =
-
     route.status === "regresando"
-
-      ? `<div class="chip">Ruta en retorno. Escanea el QR del almac&eacute;n para cerrar.</div>
-
-         <button class="btn" id="cta-arrival" type="button">Escanear QR almac&eacute;n</button>`
-
+      ? `<div class="chip">Ruta en retorno. Escanea el QR del almac&eacute;n para cerrar.</div>`
       : "";
 
 
@@ -3028,8 +2798,6 @@ async function initDestino() {
 
     if (!route) return;
 
-    const scanCenterBtn = document.getElementById("btn-scan-center");
-    const arrivalCta = document.getElementById("cta-arrival");
     const form = document.getElementById("complete-stop-form");
 
     if (form) form.onsubmit = async (e) => {
@@ -3076,39 +2844,23 @@ async function initDestino() {
 
     };
 
-    const closeAtWarehouse = async () => {
-      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: route.id, success: true });
-      if (!res.ok) {
-        flash(res.error || "No se pudo cerrar la ruta");
-        return;
-      }
-      flash("Ruta cerrada en almacen");
-      saveSession("activeRouteId", null);
-      window.location.href = "/";
-    };
-
     const applyCenterScan = async (scan) => {
-      const parsed = scan?.type ? scan : parseQRContent(scan);
-      if (!parsed) {
-        flash("QR no valido.");
-        return;
-      }
       const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
       if (!currentStop) {
         flash("Ruta sin paradas pendientes.");
         return;
       }
-      if (parsed.type !== "center") {
+      if (scan.type !== "center") {
         flash("Ese QR no es de un centro asignado.");
         return;
       }
-      const scannedCenter = parsed.center_id || parsed.id;
+      const scannedCenter = scan.center_id || scan.id;
       if (scannedCenter !== currentStop.center_id) {
         const target = state.centers.find((c) => c.id === currentStop.center_id);
         flash(`Ese QR no corresponde al destino actual. Ve a ${target ? target.name : currentStop.center_id}.`);
         return;
       }
-      if (parsed.tank_id && parsed.tank_id !== currentStop.tank_id) {
+      if (scan.tank_id && scan.tank_id !== currentStop.tank_id) {
         const targetTank = currentStop.tank_id;
         flash(`Ese QR es de otro tanque. Busca ${targetTank}.`);
         return;
@@ -3121,33 +2873,10 @@ async function initDestino() {
       }
     };
 
-    const startCenterScanner = () => {
-      const currentStop = route.stops[route.current_stop_idx] || route.stops[0];
-      openQRScanner({
-        expectedType: "center",
-        title: "Escanea el QR del centro",
-        helper: currentStop
-          ? `Destino: ${currentStop.center_id} / ${currentStop.tank_id}`
-          : "Apunta al QR del centro de la ruta.",
-        onResult: applyCenterScan,
-      });
-    };
-
-    scanCenterBtn?.addEventListener("click", startCenterScanner);
-
-    arrivalCta?.addEventListener("click", () => {
-      openQRScanner({
-        expectedType: "warehouse",
-        title: "Escanea el QR de almac\u00e9n",
-        helper: "Marca el fin de la ruta en almacen.",
-        onResult: closeAtWarehouse,
-      });
-    });
-
-    const parsedPending = pendingScan?.type ? pendingScan : parseQRContent(pendingScan);
-    if (parsedPending?.type === "center") {
+    if (pendingScan?.type === "center") {
+      const scanCopy = pendingScan;
       pendingScan = null;
-      await applyCenterScan(parsedPending);
+      await applyCenterScan(scanCopy);
       return;
     }
 
@@ -3276,10 +3005,9 @@ async function initLlegada() {
 
     if (!route || route.status !== "regresando") return;
 
-    const parsedPending = pendingScan?.type ? pendingScan : parseQRContent(pendingScan);
-    if (parsedPending?.type === "warehouse") {
+    if (pendingScan?.type === "warehouse") {
       pendingScan = null;
-      await handleWarehouseQR(parsedPending);
+      await handleWarehouseQR(pendingScan);
       return;
     }
 
@@ -3287,7 +3015,7 @@ async function initLlegada() {
 
 
 
-  async function handleWarehouseQR(scan) {
+  async function handleWarehouseQR(_scan) {
 
     const session = ensureWorkerSession();
 
@@ -3315,14 +3043,6 @@ async function initLlegada() {
 
       return;
 
-    }
-
-    if (scan) {
-      const parsed = scan?.type ? scan : parseQRContent(scan);
-      if (!parsed || parsed.type !== "warehouse") {
-        flash("Ese QR no es del almac\u00e9n.");
-        return;
-      }
     }
 
     if (route.status === "finalizada") {
@@ -3363,21 +3083,9 @@ async function initLlegada() {
 
 
 
-  qrBtn?.addEventListener("click", () => {
-
-    openQRScanner({
-
-      expectedType: "warehouse",
-
-      title: "Escanea el QR de almac\u00e9n",
-
-      helper: "Al llegar al almac\u00e9n apunta al c\u00f3digo para cerrar la ruta.",
-
-      onResult: handleWarehouseQR,
-
-    });
-
-  });
+  if (qrBtn) {
+    qrBtn.onclick = () => flash("Escanea el QR f\u00edsico del almac\u00e9n para cerrar la ruta.");
+  }
 
   load();
 
