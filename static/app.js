@@ -2850,11 +2850,15 @@ async function initDestino() {
         flash("Ruta sin paradas pendientes.");
         return;
       }
-      if (scan.type !== "center") {
+      const scannedCenter = scan.center_id || scan.id;
+      if (!scannedCenter) {
+        flash("QR de centro no reconocido.");
+        return;
+      }
+      if (scan.type && scan.type !== "center") {
         flash("Ese QR no es de un centro asignado.");
         return;
       }
-      const scannedCenter = scan.center_id || scan.id;
       if (scannedCenter !== currentStop.center_id) {
         const target = state.centers.find((c) => c.id === currentStop.center_id);
         flash(`Ese QR no corresponde al destino actual. Ve a ${target ? target.name : currentStop.center_id}.`);
@@ -2951,6 +2955,30 @@ async function initScan() {
     localStorage.setItem("pendingScan", JSON.stringify(payload));
   } catch (_e) {
     /* ignore */
+  }
+
+  const workerSession = getSession("workerSession");
+  const routeId = getSession("activeRouteId");
+
+  // Procesar directamente si ya hay ruta activa del operario
+  if (workerSession && routeId && payload.type === "center") {
+    try {
+      const res = await postJSON("/api/routes/arrive", { route_id: routeId });
+      if (!res.ok) {
+        console.warn("No se marco llegada en /scan:", res);
+      }
+    } catch (_e) {
+      /* ignore */
+    }
+  } else if (workerSession && routeId && payload.type === "warehouse") {
+    try {
+      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: routeId, success: true });
+      if (!res.ok) {
+        console.warn("No se cerro ruta en /scan:", res);
+      }
+    } catch (_e) {
+      /* ignore */
+    }
   }
 
   if (status) status.textContent = "QR capturado. Redirigiendo al paso adecuado...";
