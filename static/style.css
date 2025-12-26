@@ -1035,7 +1035,7 @@ img {
 }
 
 .route-mini-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .excel-board {
@@ -1998,6 +1998,10 @@ canvas {
   }
   .route-card {
     padding: 12px;
+  }
+  .route-mini-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
   }
   .modal-card {
     width: 100%;
