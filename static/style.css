@@ -1778,6 +1778,8 @@ canvas {
   display: none;
   place-items: center;
   z-index: 30;
+  overflow-y: auto;
+  padding: 16px;
 }
 
 .modal.active {
@@ -1796,6 +1798,8 @@ canvas {
   min-width: 280px;
   width: min(760px, 92vw);
   box-shadow: var(--shadow);
+  max-height: 92vh;
+  overflow-y: auto;
 }
 
 .route-detail-card {
