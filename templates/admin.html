@@ -19,7 +19,6 @@
           <div>
             <div class="caps">Panel de rutas</div>
             <h2>Iniciar sesi&oacute;n</h2>
-            <p class="muted">Credenciales de prueba: admin / 123</p>
           </div>
         </div>
         <form id="admin-login-form" class="form-grid">
@@ -53,46 +52,23 @@
         <div class="panel sub-panel flush">
           <div class="panel-head">
             <div>
-              <div class="caps">Prioridad de relleno</div>
-              <p class="muted small">Dep&oacute;sitos ordenados por proximidad de agotamiento.</p>
+              <div class="caps">Urgencias &lt;20%</div>
+            </div>
+            <div class="row" style="gap:6px;">
+              <button class="mini-btn" type="button" id="btn-generate-urgent">Generar ruta</button>
+              <button class="mini-btn ghost" type="button" id="btn-edit-urgent">Editar rutas</button>
             </div>
           </div>
-          <div id="admin-refill-table" class="excel-board"></div>
-        </div>
-
-        <div class="panel sub-panel flush">
-          <div class="panel-head">
+          <div class="urgent-wall">
             <div>
-              <div class="caps">Planeo urgente</div>
-              <p class="muted small">Dep&oacute;sitos &lt;=20% para repartir hoy.</p>
-            </div>
-            <button class="mini-btn" type="button" id="btn-generate-urgent">Generar ruta</button>
-          </div>
-          <div class="urgent-grid" id="urgent-planner">
-            <div class="mini-panel fill">
-              <div class="panel-head tight">
-                <div>
-                  <div class="caps">Centros en alerta</div>
-                  <p class="muted tiny">Ordenados por nivel m&iacute;nimo.</p>
-                </div>
-              </div>
-              <div id="urgent-center-list" class="excel-board compact"></div>
-            </div>
-            <div class="mini-panel fill">
-              <div class="panel-head tight">
-                <div>
-                  <div class="caps">Camiones disponibles</div>
-                  <p class="muted tiny">Parque libre ahora mismo.</p>
-                </div>
-              </div>
-              <div id="urgent-truck-list" class="excel-board compact"></div>
+              <div class="caps tiny">Pendientes</div>
+              <div id="urgent-pending" class="mini-grid refill-chip-grid"></div>
             </div>
           </div>
           <div class="panel sub-panel flush">
             <div class="panel-head">
               <div>
-                <div class="caps">Asignaciones previstas</div>
-                <p class="muted small">Rutas urgentes pendientes de operario.</p>
+                <div class="caps">Rutas generadas</div>
               </div>
             </div>
             <div id="urgent-plan-preview" class="excel-board"></div>

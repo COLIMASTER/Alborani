@@ -205,6 +205,23 @@ function formatHoursLeft(hours) {
   return `${Math.round(hours)} h`;
 }
 
+function formatEtaShort(ts) {
+  if (!ts) return "n/d";
+  return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatEtaDateTime(ts) {
+  if (!ts) return "n/d";
+  const d = new Date(ts);
+  return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function shortText(text, max = 18) {
+  if (!text) return "-";
+  const str = String(text);
+  return str.length > max ? `${str.slice(0, max - 3)}...` : str;
+}
+
 
 
 function minutesBetween(start, end) {
@@ -1390,37 +1407,94 @@ function renderActiveRoutes(routes, centers) {
 
 }
 
-function renderRefillTable(state) {
-  const box = document.getElementById("admin-refill-table");
-  if (!box) return;
-  const tanks = (state.tanks || [])
-    .filter((t) => (t.percentage || 0) < 20)
-    .sort((a, b) => (a.percentage || 0) - (b.percentage || 0));
-  if (!tanks.length) {
-    box.innerHTML = `<div class="muted small">Todo por encima del 20%.</div>`;
-    return;
-  }
-  const cards = tanks.slice(0, 60);
-  box.innerHTML = `<div class="refill-grid">${cards
-    .map((t) => {
-      const eta = t.runout_eta ? formatEta(t.runout_eta) : "n/d";
-      const tone = t.status === "critical" || t.status === "alert" ? "bad" : "warn";
-      return `
-        <div class="refill-card ${tone}">
-          <div class="row spaced">
-            <div>
-              <div class="muted tiny">${t.center_name || t.center_id}</div>
-              <strong>${t.label}</strong>
-            </div>
-            <span class="pill tiny">${t.percentage}%</span>
-          </div>
-          <div class="refill-level"><div class="level-bar" style="width:${Math.max(4, t.percentage)}%"></div></div>
-          <div class="muted small">Faltan ${formatLiters(t.deficit_l || 0)}</div>
-          <div class="muted tiny">Previsto ${eta}${t.runout_hours ? " (" + formatHoursLeft(t.runout_hours) + ")" : ""}</div>
-        </div>
-      `;
+function renderUrgentWall(state) {
+  const pendingBox = document.getElementById("urgent-pending");
+  const btn = document.getElementById("btn-generate-urgent");
+  if (!pendingBox) return;
+  const activeRoutes = (state.routes || []).filter((r) => r.status && r.status !== "finalizada");
+  const assignedCenters = new Set(
+    activeRoutes.flatMap((r) => r.stops?.map((s) => s.center_id) || [])
+  );
+
+  const tanks = (state.tanks || []).filter((t) => (t.percentage || 0) < 20);
+  const grouped = tanks.reduce((acc, t) => {
+    const key = t.center_id || t.center_name || "centro";
+    acc[key] = acc[key] || { center_id: t.center_id, center_name: t.center_name || t.center_id, tanks: [] };
+    acc[key].tanks.push(t);
+    return acc;
+  }, {});
+
+  const centers = Object.values(grouped)
+    .map((c) => {
+      const sorted = c.tanks.slice().sort((a, b) => (a.percentage || 0) - (b.percentage || 0));
+      const minTank = sorted[0];
+      const minPct = minTank?.percentage ?? 0;
+      const totalDeficit = c.tanks.reduce((sum, t) => sum + (t.deficit_l || 0), 0);
+      const etaMs = c.tanks
+        .map((t) => (t.runout_eta ? new Date(t.runout_eta).getTime() : Number.MAX_SAFE_INTEGER))
+        .sort((a, b) => a - b)[0];
+      const etaText = Number.isFinite(etaMs) ? formatEtaDateTime(etaMs) : "n/d";
+      const topTanks = sorted.slice(0, 3);
+      const tone = minTank?.status === "critical" || minTank?.status === "alert" ? "bad" : "warn";
+      const assigned = assignedCenters.has(c.center_id);
+      return { ...c, minPct, totalDeficit, etaText, topTanks, tone, assigned };
     })
-    .join("")}</div>`;
+    .sort((a, b) => a.minPct - b.minPct)
+    .slice(0, 180);
+
+  const pending = centers.filter((c) => !c.assigned);
+  if (!pending.length) {
+    pendingBox.innerHTML = `<div class="empty-count">0</div>`;
+  } else {
+    pendingBox.innerHTML = `<div class="mini-grid refill-chip-grid">${pending
+      .map((c) => {
+        const toneClass = c.assigned ? "in-route" : c.tone === "bad" ? "alert" : "soft";
+        const tankRows = c.tanks
+          .slice()
+          .sort((a, b) => (a.percentage || 0) - (b.percentage || 0))
+          .slice(0, 4);
+        const extra = c.tanks.length - tankRows.length;
+        return `
+          <div class="micro-card refill-chip ${toneClass}">
+            <div class="micro-top">
+              <span class="micro-label">${shortText(c.center_name || c.center_id)}</span>
+              <span class="pill tiny tone-${c.tone}">${c.minPct}%</span>
+            </div>
+            <div class="micro-meta">
+              <span>${formatLiters(c.totalDeficit)}</span>
+              <span>${c.tanks.length} deps</span>
+            </div>
+            <div class="micro-meta">
+              <span class="micro-eta">${c.etaText}</span>
+              <span></span>
+            </div>
+            <div class="tank-mini-list">
+              ${tankRows
+                .map(
+                  (t) => `
+                <div class="tank-mini">
+                  <div class="tank-mini-top">
+                    <span>${t.label}</span>
+                    <span>${t.percentage}%</span>
+                  </div>
+                  <div class="tank-bar"><span style="width:${Math.max(6, t.percentage)}%"></span></div>
+                  <div class="tank-mini-meta">${formatLiters(t.deficit_l || 0)}</div>
+                </div>`
+                )
+                .join("")}
+              ${extra > 0 ? `<div class="tank-mini extra">+${extra} m&aacute;s</div>` : ""}
+            </div>
+          </div>
+        `;
+      })
+      .join("")}</div>`;
+  }
+
+  const availableTrucks = (state.trucks || []).filter((t) => t.status === "parked" && !t.route_id);
+  if (btn) btn.disabled = !pending.length || !availableTrucks.length;
+
+  const editBtn = document.getElementById("btn-edit-urgent");
+  if (editBtn) editBtn.disabled = false;
 }
 
 function renderUrgentPlanner(state) {
@@ -1436,7 +1510,7 @@ function renderUrgentPlanner(state) {
   );
   const availableTrucks = (state.trucks || []).filter((t) => t.status === "parked" && !t.route_id);
   if (!urgent.length) {
-    centerBox.innerHTML = `<div class="empty-card">Sin dep&oacute;sitos al 20% o menos.</div>`;
+    centerBox.innerHTML = `<div class="empty-count">0</div>`;
   } else {
     const sortedCenters = urgent
       .map((c) => {
@@ -1444,7 +1518,7 @@ function renderUrgentPlanner(state) {
         return { ...c, minPct };
       })
       .sort((a, b) => a.minPct - b.minPct);
-    centerBox.innerHTML = `<div class="urgent-card-grid">${sortedCenters
+    centerBox.innerHTML = `<div class="mini-grid tight-grid">${sortedCenters
       .map((c) => {
         const etaMs = c.tanks
           .map((t) => (t.runout_eta ? new Date(t.runout_eta).getTime() : Number.MAX_SAFE_INTEGER))
@@ -1452,23 +1526,24 @@ function renderUrgentPlanner(state) {
         const eta = etaMs && Number.isFinite(etaMs) ? new Date(etaMs) : null;
         const topTanks = c.tanks.slice().sort((a, b) => a.percentage - b.percentage).slice(0, 2);
         const assigned = assignedCenters.has(c.center_id);
+        const tone = assigned ? "ok" : "bad";
         return `
-          <div class="refill-card ${assigned ? "ok" : "bad"} tight">
-            <div class="row spaced">
-              <div>
-                <div class="muted tiny">${c.center_name}</div>
-                <strong>${topTanks[0]?.percentage || "-"}% min</strong>
-              </div>
-              <span class="pill tiny">${c.tanks.length} deps</span>
+          <div class="micro-card ${assigned ? "soft" : "alert"}">
+            <div class="micro-top">
+              <span class="micro-label">${shortText(c.center_name)}</span>
+              <span class="pill tiny tone-${tone}">${topTanks[0]?.percentage ?? "-"}%</span>
             </div>
-            <div class="muted small">${assigned ? "Asociada a ruta" : `Litros urgentes: ${formatLiters(c.total_deficit)}`}</div>
-            <div class="muted tiny">${assigned ? "En reparto" : `Reponer antes de ${eta ? formatEta(eta) : "n/d"}`}</div>
-            <div class="mini-row">
+            <div class="micro-meta">
+              <span>${c.tanks.length} deps</span>
+              <span>${eta ? formatEtaShort(eta) : "n/d"}</span>
+            </div>
+            <div class="micro-meta">
+              <span>${formatLiters(c.total_deficit)}</span>
+              <span>${assigned ? "Asignada" : "Libre"}</span>
+            </div>
+            <div class="tag-row small">
               ${topTanks
-                .map(
-                  (t) =>
-                    `<span class="mini-tag">${t.label}: ${t.percentage}%</span>`
-                )
+                .map((t) => `<span class="mini-tag">${t.label} ${t.percentage}%</span>`)
                 .join("")}
             </div>
           </div>
@@ -1477,18 +1552,20 @@ function renderUrgentPlanner(state) {
       .join("")}</div>`;
   }
   if (!availableTrucks.length) {
-    truckBox.innerHTML = `<div class="empty-card">Sin camiones libres.</div>`;
+    truckBox.innerHTML = `<div class="empty-count">0</div>`;
   } else {
-    truckBox.innerHTML = `<div class="truck-card-grid">${availableTrucks
+    truckBox.innerHTML = `<div class="mini-grid tight-grid">${availableTrucks
       .map(
         (t) => `
-        <div class="truck-card compact">
-          <div class="row spaced">
-            <strong>${t.id}</strong>
+        <div class="micro-card soft">
+          <div class="micro-top">
+            <span class="micro-label">${t.id}</span>
             <span class="pill tiny">${formatLiters(t.capacity_l)}</span>
           </div>
-          <div class="muted small">${t.driver || "-"}</div>
-          <div class="muted tiny">${t.notes || ""}</div>
+          <div class="micro-meta">
+            <span>${t.driver || "-"}</span>
+            <span>${t.notes || ""}</span>
+          </div>
         </div>
       `
       )
@@ -1502,31 +1579,38 @@ function renderUrgentPreview(state) {
   if (!box) return;
   const planned = (state.routes || []).filter((r) => r.auto_generated);
   if (!planned.length) {
-    box.innerHTML = `<div class="muted small">Sin rutas urgentes planificadas.</div>`;
+    box.innerHTML = `<div class="empty-count">0</div>`;
     return;
   }
-  box.innerHTML = `<div class="refill-grid">${planned
+  box.innerHTML = `<div class="mini-grid route-mini-grid">${planned
     .map((r) => {
       const status = routeStatusLabel[r.status] || r.status;
-      const stopList =
+      const tone = r.status === "finalizada" ? "ok" : r.status === "planificada" ? "warn" : "bad";
+      const stopTags =
         r.stops
-          ?.map((s) => {
+          ?.slice(0, 3)
+          .map((s) => {
             const c = state.centers?.find((cc) => cc.id === s.center_id);
             const centerName = c ? c.name : s.center_id;
             const tankLabel = c?.tanks?.find((t) => t.id === s.tank_id)?.label || s.tank_id;
-            return `${centerName} · ${tankLabel} (${formatLiters(s.liters)})`;
+            return `<span class="mini-tag">${shortText(centerName, 16)} ${tankLabel}</span>`;
           })
-          .join("<br>") || "";
+          .join("") || "";
       return `
-        <div class="refill-card neutral">
-          <div class="row spaced">
-            <strong>${r.id} · ${r.truck_id}</strong>
-            <span class="pill tiny">${status}</span>
+        <div class="micro-card in-route">
+          <div class="micro-top">
+            <span class="micro-label">${r.id}</span>
+            <span class="pill tiny tone-${tone}">${status}</span>
           </div>
-          <div class="muted small">Destinos: ${r.stops?.length || 0}</div>
-          <div class="muted small">Carga: ${formatLiters(r.planned_load_l || r.total_delivered || 0)}</div>
-          <div class="muted tiny">Operario: ${r.worker || "Pendiente"}</div>
-          ${stopList ? `<div class="muted tiny" style="margin-top:6px; line-height:1.4;">${stopList}</div>` : ""}
+          <div class="micro-meta">
+            <span>${r.truck_id}</span>
+            <span>${r.worker || "Pendiente"}</span>
+          </div>
+          <div class="micro-meta">
+            <span>${r.stops?.length || 0} paradas</span>
+            <span>${formatLiters(r.planned_load_l || r.total_delivered || 0)}</span>
+          </div>
+          ${stopTags ? `<div class="tag-row tiny">${stopTags}</div>` : ""}
         </div>
       `;
     })
@@ -3251,6 +3335,59 @@ function ensureRouteDetailModal() {
   });
 }
 
+function ensureRouteEditModal() {
+  if (document.getElementById("route-edit-modal")) return;
+  const wrapper = document.createElement("div");
+  wrapper.innerHTML = `
+    <div id="route-edit-modal" class="modal hidden">
+      <div class="modal-card route-detail-card">
+        <div class="row spaced" style="gap:8px; flex-wrap:wrap;">
+          <div>
+            <div class="caps">Rutas urgentes</div>
+            <h3>Editar asignaci&oacute;n</h3>
+          </div>
+          <button class="mini-btn" id="close-route-edit" type="button">Cerrar</button>
+        </div>
+        <div id="route-edit-body" class="route-detail-body">
+          <div class="edit-block">
+            <div class="caps">Auto generadas</div>
+            <div id="auto-route-edit"></div>
+            <div class="row" style="justify-content:flex-end; gap:8px;">
+              <button class="mini-btn ghost" id="cancel-route-edit" type="button">Cancelar</button>
+              <button class="mini-btn" id="save-route-edit" type="button">Guardar</button>
+            </div>
+          </div>
+          <div class="edit-block">
+            <div class="caps">Crear ruta manual</div>
+            <div class="route-form-grid">
+              <label>Operario<select id="manual-worker"></select></label>
+              <label>Camion<select id="manual-truck"></select></label>
+            </div>
+            <div id="manual-stops" class="stop-list"></div>
+            <div class="mini-row" style="justify-content:flex-start;">
+              <button class="mini-btn" type="button" id="add-manual-stop">Anadir parada</button>
+              <button class="mini-btn ghost" type="button" id="clear-manual-stops">Limpiar</button>
+            </div>
+            <button class="btn" type="button" id="save-route-manual">Crear ruta</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  const modalEl = wrapper.firstElementChild;
+  if (modalEl) document.body.appendChild(modalEl);
+  const modal = document.getElementById("route-edit-modal");
+  const close = () => {
+    modal?.classList.add("hidden");
+    modal?.classList.remove("active");
+  };
+  document.getElementById("close-route-edit")?.addEventListener("click", close);
+  document.getElementById("cancel-route-edit")?.addEventListener("click", close);
+  modal?.addEventListener("click", (e) => {
+    if (e.target === modal) close();
+  });
+}
+
 
 function openRouteDetail(route, state) {
   ensureRouteDetailModal();
@@ -3332,6 +3469,8 @@ async function initAdmin() {
 
   const adminSession = getSession("adminSession");
 
+  let adminState = null;
+
 
 
   const renderStats = (state) => {
@@ -3361,11 +3500,10 @@ async function initAdmin() {
         .map((a) => a.message || `${a.center} / ${a.tank_id}`)
         .join("<br>");
 
-    const buildCard = (label, value, detail, tone = "") => `
-      <div class="mini-card pop-card ${tone}">
+    const buildCard = (label, value, _detail, tone = "") => `
+      <div class="mini-card stat-card ${tone}">
         <div class="stat-title">${label}</div>
         <div class="stat-value">${value}</div>
-        <div class="popover">${detail || "<span class='muted'>Sin datos</span>"}</div>
       </div>
     `;
 
@@ -3393,9 +3531,7 @@ async function initAdmin() {
 
 
   const renderRouteTable = (state) => {
-
     const box = document.getElementById("admin-route-table");
-
     if (!box) return;
 
     const cards = [];
@@ -3404,34 +3540,34 @@ async function initAdmin() {
       const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
       const center = state.centers.find((c) => c.id === stop?.center_id);
       const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
-      cards.push({ data: r, destino: `${center ? center.name : stop?.center_id || "-"} · ${tank ? tank.label : stop?.tank_id || ""}` });
+      cards.push({ data: r, destino: `${center ? center.name : stop?.center_id || "-"} / ${tank ? tank.label : stop?.tank_id || ""}` });
     });
 
     state.route_history.slice(0, 12).forEach((r) => {
       const lastStop = r.stops?.[r.stops.length - 1];
-      cards.push({ data: r, destino: `${lastStop?.center_id || "-"} · ${lastStop?.tank_id || ""}` });
+      cards.push({ data: r, destino: `${lastStop?.center_id || "-"} / ${lastStop?.tank_id || ""}` });
     });
 
-    box.innerHTML = `<div class="route-card-grid">${cards
+    if (!cards.length) {
+      box.innerHTML = `<div class="empty-count">0</div>`;
+      return;
+    }
+
+    box.innerHTML = `<div class="mini-grid route-mini-grid">${cards
       .map(({ data, destino }) => {
         const status = routeStatusLabel[data.status] || data.status;
-        const liters = formatLiters(data.total_delivered || data.planned_load_l || 0);
-        const when = formatDatePlus1(data.finished_at || data.started_at);
+        const tone = data.status === "finalizada" ? "ok" : data.status === "planificada" ? "warn" : "bad";
         return `
-          <div class="route-card compact">
-            <div class="row spaced">
-              <strong>${data.id} · ${data.truck_id}</strong>
-              <span class="status badge">${status}</span>
+          <div class="route-card micro">
+            <div class="micro-top">
+              <span class="micro-label">${data.id}</span>
+              <span class="pill tiny tone-${tone}">${status}</span>
             </div>
-            <div class="tank-meta">
-              <span>${destino}</span>
-              <span>${liters}</span>
+            <div class="micro-meta" aria-hidden="true">
+              <span>${data.truck_id}</span>
+              <span>${data.stops?.length || 0} paradas</span>
             </div>
-            <div class="tank-meta">
-              <span>${data.worker || "Pendiente"}</span>
-              <span>${when}</span>
-            </div>
-            <button class="mini-btn" data-route="${data.id}">Ver detalle</button>
+            <button class="mini-btn" data-route="${data.id}">Más detalle</button>
           </div>
         `;
       })
@@ -3456,12 +3592,11 @@ async function initAdmin() {
   const load = async () => {
 
     const state = await fetchState();
+    adminState = state;
 
     renderStats(state);
 
-    renderRefillTable(state);
-
-    renderUrgentPlanner(state);
+    renderUrgentWall(state);
 
     renderUrgentPreview(state);
 
@@ -3469,6 +3604,259 @@ async function initAdmin() {
 
     renderCharts(state);
 
+  };
+
+  const openEditUrgentRoutes = () => {
+    if (!adminState) return;
+    ensureRouteEditModal();
+    const modal = document.getElementById("route-edit-modal");
+    const autoBox = document.getElementById("auto-route-edit");
+    const saveBtn = document.getElementById("save-route-edit");
+    const workerSelect = document.getElementById("manual-worker");
+    const truckSelect = document.getElementById("manual-truck");
+    const stopsBox = document.getElementById("manual-stops");
+    const addStopBtn = document.getElementById("add-manual-stop");
+    const clearStopsBtn = document.getElementById("clear-manual-stops");
+    const saveManualBtn = document.getElementById("save-route-manual");
+    if (!modal || !autoBox || !saveBtn || !workerSelect || !truckSelect || !stopsBox || !addStopBtn || !saveManualBtn)
+      return;
+
+    const planned = (adminState.routes || []).filter((r) => r.auto_generated);
+    const centers = adminState.centers || [];
+    const workers = adminState.workers || [];
+    const trucks = adminState.trucks || [];
+    const allowedTrucks = trucks.filter(
+      (t) => t.status === "parked" || planned.some((r) => r.truck_id === t.id)
+    );
+    const parkedTrucks = trucks.filter((t) => t.status === "parked");
+
+    const workerOptions =
+      `<option value="">Elegir operario</option>` +
+      workers.map((w) => `<option value="${w}">${w}</option>`).join("");
+    workerSelect.innerHTML = workerOptions;
+
+    const truckOptions =
+      `<option value="">Elegir camion</option>` +
+      parkedTrucks.map((t) => `<option value="${t.id}">${t.id} (${formatLiters(t.capacity_l)})</option>`).join("");
+    truckSelect.innerHTML = truckOptions;
+
+    if (planned.length) {
+      const autoTruckOptions = allowedTrucks
+        .map((t) => `<option value="${t.id}">${t.id} (${formatLiters(t.capacity_l)})</option>`)
+        .join("");
+      autoBox.innerHTML = planned
+        .map((r) => {
+          const tone = r.status === "finalizada" ? "ok" : r.status === "planificada" ? "warn" : "bad";
+          return `
+            <div class="detail-row route-edit-row">
+              <strong>${r.id}</strong>
+            <div class="route-edit-controls">
+              <select data-route="${r.id}" data-current="${r.truck_id}" data-type="truck">
+                ${autoTruckOptions}
+              </select>
+              <select data-route="${r.id}" data-current-worker="${r.worker || ""}" data-type="worker">
+                <option value="">Operario</option>
+                ${workers.map((w) => `<option value="${w}">${w}</option>`).join("")}
+              </select>
+            </div>
+            <span class="pill tiny tone-${tone}">${routeStatusLabel[r.status] || r.status}</span>
+            <button class="mini-btn ghost" data-delete-route="${r.id}" type="button">Eliminar</button>
+          </div>
+        `;
+      })
+      .join("");
+
+      autoBox.querySelectorAll("select[data-type='truck']").forEach((sel) => {
+        sel.value = sel.getAttribute("data-current") || sel.value;
+      });
+      autoBox.querySelectorAll("select[data-type='worker']").forEach((sel) => {
+        sel.value = sel.getAttribute("data-current-worker") || sel.value;
+      });
+    } else {
+      autoBox.innerHTML = `<div class="empty-count">0</div>`;
+    }
+
+    const close = () => {
+      modal.classList.add("hidden");
+      modal.classList.remove("active");
+    };
+
+    autoBox.querySelectorAll("button[data-delete-route]").forEach((btn) => {
+      btn.onclick = async () => {
+        const routeId = btn.getAttribute("data-delete-route");
+        btn.disabled = true;
+        const res = await postJSON("/api/admin/delete-route", { route_id: routeId });
+        btn.disabled = false;
+        if (!res.ok) {
+          flash(res.error || "No se pudo eliminar");
+          return;
+        }
+        flash("Ruta eliminada");
+        load();
+        close();
+      };
+    });
+
+    saveBtn.onclick = async () => {
+      const rows = Array.from(autoBox.querySelectorAll(".route-edit-row"));
+      const changes = rows
+        .map((row) => {
+          const routeId = row.querySelector("select[data-type='truck']")?.getAttribute("data-route");
+          const truckSel = row.querySelector("select[data-type='truck']");
+          const workerSel = row.querySelector("select[data-type='worker']");
+          const newTruck = truckSel?.value;
+          const currentTruck = truckSel?.getAttribute("data-current");
+          const newWorker = workerSel?.value;
+          const currentWorker = workerSel?.getAttribute("data-current-worker") || "";
+          const changed = (newTruck && newTruck !== currentTruck) || (newWorker || "") !== currentWorker;
+          return changed ? { routeId, truckId: newTruck, worker: newWorker || undefined } : null;
+        })
+        .filter(Boolean);
+
+      if (!changes.length) {
+        close();
+        return;
+      }
+      const original = saveBtn.textContent;
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Guardando...";
+      for (const change of changes) {
+        const res = await postJSON("/api/admin/reassign-route", {
+          route_id: change.routeId,
+          truck_id: change.truckId,
+          worker: change.worker,
+        });
+        if (!res.ok) {
+          flash(res.error || "No se pudo reasignar");
+          break;
+        }
+      }
+      saveBtn.disabled = false;
+      saveBtn.textContent = original;
+      close();
+      load();
+    };
+
+    const findCenter = (id) => centers.find((c) => c.id === id);
+    const findTank = (cId, tId) => findCenter(cId)?.tanks?.find((t) => t.id === tId);
+
+    const fillTankSelect = (row, centerId, preferredTank) => {
+      const tankSel = row.querySelector(".stop-tank");
+      if (!tankSel) return;
+      const center = findCenter(centerId);
+      if (!center || !center.tanks?.length) {
+        tankSel.innerHTML = `<option value=\"\">Sin tanques</option>`;
+        return;
+      }
+      tankSel.innerHTML = center.tanks
+        .map((t) => `<option value="${t.id}">${t.label} (${t.percentage}%)</option>`)
+        .join("");
+      tankSel.value = preferredTank || tankSel.value;
+      return tankSel.value;
+    };
+
+    const addStopRow = (preset = {}) => {
+      const row = document.createElement("div");
+      row.className = "stop-row";
+      row.innerHTML = `
+        <select class="stop-center">
+          ${centers.map((c) => `<option value="${c.id}">${c.name}</option>`).join("")}
+        </select>
+        <select class="stop-tank"></select>
+        <input type="number" class="stop-liters" placeholder="Litros" min="0" step="100" />
+        <div class="controls">
+          <button type="button" class="mini-btn" data-move="up">↑</button>
+          <button type="button" class="mini-btn" data-move="down">↓</button>
+          <button type="button" class="mini-btn ghost" data-remove="1">Quitar</button>
+        </div>
+      `;
+      stopsBox.appendChild(row);
+      const centerSel = row.querySelector(".stop-center");
+      const tankSel = row.querySelector(".stop-tank");
+      const litersInput = row.querySelector(".stop-liters");
+      if (preset.center_id) centerSel.value = preset.center_id;
+      const chosenTank = fillTankSelect(row, centerSel.value, preset.tank_id);
+      if (preset.tank_id && tankSel) tankSel.value = preset.tank_id;
+      const tankInfo = findTank(centerSel.value, tankSel?.value || chosenTank);
+      litersInput.value = preset.liters ?? tankInfo?.deficit_l ?? "";
+
+      centerSel.onchange = () => {
+        const newTank = fillTankSelect(row, centerSel.value);
+        const info = findTank(centerSel.value, newTank);
+        if (info) litersInput.value = info.deficit_l || "";
+      };
+      row.querySelectorAll("button[data-move]").forEach((btn) => {
+        btn.onclick = () => {
+          if (btn.getAttribute("data-move") === "up" && row.previousElementSibling) {
+            stopsBox.insertBefore(row, row.previousElementSibling);
+          } else if (btn.getAttribute("data-move") === "down" && row.nextElementSibling) {
+            stopsBox.insertBefore(row.nextElementSibling, row);
+          }
+        };
+      });
+      row.querySelector("button[data-remove]")?.addEventListener("click", () => row.remove());
+    };
+
+    stopsBox.innerHTML = "";
+    addStopRow();
+
+    addStopBtn.onclick = () => addStopRow();
+    clearStopsBtn.onclick = () => {
+      stopsBox.innerHTML = "";
+      addStopRow();
+    };
+
+    saveManualBtn.onclick = async () => {
+      const worker = workerSelect.value;
+      const truckId = truckSelect.value;
+      const stopRows = Array.from(stopsBox.querySelectorAll(".stop-row"));
+      if (!worker || !truckId) {
+        flash("Selecciona operario y camion");
+        return;
+      }
+      const stops = stopRows
+        .map((row) => {
+          const centerId = row.querySelector(".stop-center")?.value;
+          const tankId = row.querySelector(".stop-tank")?.value;
+          const liters = Number(row.querySelector(".stop-liters")?.value || 0);
+          const tankInfo = findTank(centerId, tankId);
+          return centerId && tankId && liters > 0
+            ? { center_id: centerId, tank_id: tankId, liters, product: tankInfo?.product }
+            : null;
+        })
+        .filter(Boolean);
+      if (!stops.length) {
+        flash("Anade al menos una parada con litros");
+        return;
+      }
+      const load_l = stops.reduce((sum, s) => sum + (s.liters || 0), 0);
+      const product_type = stops[0]?.product || "Multiproducto";
+      const payload = {
+        worker,
+        truck_id: truckId,
+        origin: adminState.warehouse?.name,
+        load_l,
+        product_type,
+        stops,
+        auto_generated: true,
+      };
+      const original = saveManualBtn.textContent;
+      saveManualBtn.disabled = true;
+      saveManualBtn.textContent = "Creando...";
+      const res = await postJSON("/api/routes/plan", payload);
+      saveManualBtn.disabled = false;
+      saveManualBtn.textContent = original;
+      if (!res.ok) {
+        flash(res.error || "No se pudo crear la ruta");
+        return;
+      }
+      flash("Ruta creada");
+      close();
+      load();
+    };
+
+    modal.classList.remove("hidden");
+    modal.classList.add("active");
   };
 
 
@@ -3508,6 +3896,11 @@ async function initAdmin() {
   }
 
   bindUrgentButton();
+
+  const editBtn = document.getElementById("btn-edit-urgent");
+  if (editBtn) {
+    editBtn.onclick = openEditUrgentRoutes;
+  }
 
   const form = document.getElementById("admin-login-form");
 

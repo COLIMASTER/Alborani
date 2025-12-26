@@ -975,6 +975,7 @@ def _serialize_state():
         "centers": serialized_centers,
         "tanks": flat_tanks,
         "trucks": serialized_trucks,
+        "workers": list(WORKERS.keys()),
         "alerts": alerts,
         "routes": _serialize_routes(active_routes),
         "route_history": _serialize_routes(route_history[:8]),
@@ -1066,6 +1067,84 @@ def api_admin_auto_plan():
     return jsonify({"ok": True, "created": len(planned), "routes": _serialize_routes(planned)})
 
 
+@app.route("/api/admin/reassign-route", methods=["POST"])
+def api_admin_reassign_route():
+    payload = request.get_json(force=True)
+    route_id = payload.get("route_id")
+    truck_id = payload.get("truck_id")
+    worker = payload.get("worker")
+    if not route_id or not truck_id:
+        return jsonify({"ok": False, "error": "Faltan datos"}), 400
+
+    route = next((r for r in active_routes if r["id"] == route_id), None)
+    if not route:
+        return jsonify({"ok": False, "error": "Ruta no encontrada"}), 404
+    if route.get("status") not in ["planificada"]:
+        return jsonify({"ok": False, "error": "Solo puedes editar rutas planificadas"}), 400
+
+    new_truck = next((t for t in trucks if t["id"] == truck_id), None)
+    if not new_truck:
+        return jsonify({"ok": False, "error": "Camion no valido"}), 400
+
+    busy_other = new_truck.get("route_id") and new_truck.get("route_id") != route_id
+    if busy_other or new_truck.get("status") not in ["parked", "maintenance", None]:
+        return jsonify({"ok": False, "error": "Camion no disponible"}), 400
+
+    old_truck = next((t for t in trucks if t.get("route_id") == route_id), None)
+    if old_truck and old_truck["id"] != new_truck["id"]:
+        old_truck["route_id"] = None
+        old_truck["notes"] = "Libre"
+        if old_truck.get("status") != "outbound":
+            old_truck["status"] = "parked"
+        old_truck["current_load_l"] = 0
+        old_truck["destination"] = None
+
+    route["truck_id"] = new_truck["id"]
+    new_truck["route_id"] = route["id"]
+    new_truck["status"] = "parked"
+    new_truck["notes"] = payload.get("notes") or f"Ruta {route_id} asignada manual"
+    new_truck["current_load_l"] = route.get("planned_load_l", new_truck.get("current_load_l", 0))
+
+    if worker:
+        if worker not in WORKERS:
+            return jsonify({"ok": False, "error": "Operario no valido"}), 400
+        route["worker"] = worker
+        route["pending_worker"] = False
+
+    route.setdefault("history", []).append(
+        {"event": "reasignada", "note": f"Asignada al camion {truck_id}", "ts": _now()}
+    )
+
+    _save_state()
+    return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
+
+
+@app.route("/api/admin/delete-route", methods=["POST"])
+def api_admin_delete_route():
+    payload = request.get_json(force=True)
+    route_id = payload.get("route_id")
+    if not route_id:
+        return jsonify({"ok": False, "error": "Falta route_id"}), 400
+    route = next((r for r in active_routes if r["id"] == route_id), None)
+    if not route:
+        return jsonify({"ok": False, "error": "Ruta no encontrada"}), 404
+    if not route.get("auto_generated"):
+        return jsonify({"ok": False, "error": "Solo puedes eliminar rutas auto generadas"}), 400
+    if route.get("status") != "planificada":
+        return jsonify({"ok": False, "error": "Solo rutas planificadas pueden eliminarse"}), 400
+
+    active_routes[:] = [r for r in active_routes if r["id"] != route_id]
+    truck = next((t for t in trucks if t.get("route_id") == route_id), None)
+    if truck:
+        truck["route_id"] = None
+        truck["status"] = "parked"
+        truck["notes"] = "Libre"
+        truck["current_load_l"] = 0
+        truck["destination"] = None
+    _save_state()
+    return jsonify({"ok": True, "deleted": route_id})
+
+
 @app.route("/api/routes/claim", methods=["POST"])
 def api_claim_route():
     payload = request.get_json(force=True)
@@ -1126,6 +1205,7 @@ def api_plan_route():
     load_l = payload.get("load_l")
     product_type = payload.get("product_type")
     stops = payload.get("stops", [])
+    auto_generated = bool(payload.get("auto_generated"))
 
     if worker not in WORKERS:
         return jsonify({"ok": False, "error": "Trabajador no valido"}), 400
@@ -1177,9 +1257,9 @@ def api_plan_route():
         "origin": origin,
         "product_type": product_type,
         "stops": validated_stops,
-        "status": "en_ruta",
+        "status": "planificada",
         "current_stop_idx": 0,
-        "started_at": _now(),
+        "started_at": None,
         "finished_at": None,
         "history": [
             {"event": "planificada", "note": f"{len(validated_stops)} destinos", "ts": _now()}
@@ -1187,6 +1267,9 @@ def api_plan_route():
         "current_leg": None,
         "total_delivered": 0,
         "success": None,
+        "auto_generated": auto_generated,
+        "pending_worker": False,
+        "planned_load_l": load_l,
     }
     active_routes.append(route)
 
@@ -1201,11 +1284,11 @@ def api_plan_route():
         "center_id": dest_center["id"],
         "tank_id": dest_tank["id"],
     }
-    _set_leg(route, truck, leg_origin, leg_dest, f"Hacia {dest_center['name']}")
-    truck["status"] = "outbound"
+    truck["status"] = "parked"
     truck["route_id"] = route_id
     truck["current_load_l"] = load_l
-    truck["notes"] = f"Salida de {worker} con {load_l} L"
+    truck["notes"] = "Ruta planificada manual"
+    truck["destination"] = None
 
     _save_state()
     return jsonify({"ok": True, "route": _serialize_routes([route])[0]})
