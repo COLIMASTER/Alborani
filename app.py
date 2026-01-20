@@ -1025,6 +1025,21 @@ def view_reports():
     return render_template("reports.html")
 
 
+@app.route("/alertas")
+def view_alerts():
+    return render_template("alerts.html")
+
+
+@app.route("/mapa")
+def view_map():
+    return render_template("map.html")
+
+
+@app.route("/hub")
+def view_hub():
+    return render_template("hub.html")
+
+
 @app.route("/centro/<center_id>")
 def view_center(center_id):
     return render_template("center.html", center_id=center_id)

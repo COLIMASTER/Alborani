@@ -42,6 +42,9 @@
         <button class="mini-btn hidden" id="session-toggle" type="button">Sesion</button>
         <nav class="top-links">
           <a href="/">Inicio</a>
+          <a href="/alertas" class="admin-only-button">Panel de alertas</a>
+          <a href="/mapa" class="admin-only-button">Mapa</a>
+          <a href="/informes" class="admin-only-button">Informes</a>
           <a href="/admin" class="admin-only-button">Panel rutas</a>
         </nav>
         <img src="/static/logo.png" alt="Savian logo" class="extra-logo" />
@@ -72,75 +75,22 @@
         </div>
       </section>
 
-      <section class="hero compact admin-only">
-        <div class="hero-copy">
-          <span class="pill glass">Panel de trabajo</span>
-          <h1>Operaci&oacute;n diaria.</h1>
-          <p class="muted">Accesos r&aacute;pidos y rutas activas.</p>
-          <div class="toolbar">
-            <button class="btn ghost admin-only-button" onclick="window.location.href='/admin'">Panel de rutas</button>
-            <button class="btn ghost" id="btn-drain">Simular dep&oacute;sitos</button>
-          </div>
-          <div class="hero-mini">
-            <div>
-              <div class="caps">Perfiles demo</div>
-              <p class="muted">prueba1 / 123 &middot; prueba2 / 123 &middot; prueba3 / 123</p>
-            </div>
-            <div>
-              <div class="caps">Admin</div>
-              <p class="muted">admin / 123</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section class="panel center-wall admin-only">
         <div class="panel-head">
           <div>
-            <div class="caps">Centros</div>
+            <div class="caps">Panel de dep&oacute;sitos</div>
+            <h2>Centros y niveles</h2>
           </div>
           <div class="legend">
             <span><span class="dot crit"></span>Alerta</span>
             <span><span class="dot warn"></span>Precaucion</span>
             <span><span class="dot ok"></span>Verde</span>
           </div>
+          <div class="toolbar">
+            <button class="btn ghost" id="btn-drain">Simular dep&oacute;sitos</button>
+          </div>
         </div>
         <div id="center-grid" class="micro-grid"></div>
-      </section>
-
-      <section class="panel alert-panel admin-only">
-        <div class="panel-head">
-          <div>
-            <div class="caps">Alertas globales</div>
-          </div>
-        </div>
-        <div id="alarms-panel" class="alert-wall"></div>
-      </section>
-
-      <section class="split admin-only wide">
-        <div class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="caps">Mapa</div>
-            </div>
-          </div>
-          <div id="map-admin" class="map"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="caps">Rutas activas</div>
-            </div>
-          </div>
-          <div id="active-routes" class="route-list compact"></div>
-          <div class="timeline-head">Historial</div>
-          <div class="filter-row" id="log-filter-row">
-            <div class="pill-switch" id="filter-range"></div>
-            <div class="pill-switch" id="filter-worker"></div>
-            <div class="pill-switch" id="filter-center"></div>
-          </div>
-          <ul id="delivery-log" class="log slim"></ul>
-        </div>
       </section>
 
       <section class="panel worker-only">

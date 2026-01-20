@@ -555,7 +555,6 @@ function refreshSessionBadges() {
         flash("Sesion cerrada");
         refreshSessionBadges();
         toggleGate(true);
-        if (typeof loadHome === "function") loadHome();
         window.location.href = "/";
         return;
       }
@@ -592,7 +591,7 @@ function refreshSessionBadges() {
 
         if (hint) hint.textContent = "Sesion no iniciada";
 
-        if (typeof loadHome === "function") loadHome();
+        window.location.href = "/";
 
         return;
 
@@ -602,6 +601,10 @@ function refreshSessionBadges() {
 
     };
 
+  });
+
+  document.querySelectorAll(".admin-only-button").forEach((el) => {
+    el.style.display = admin ? "inline-flex" : "none";
   });
 
 }
@@ -757,13 +760,11 @@ function ensureSessionModal() {
     }
 
     if (res.role === "admin") {
-
       saveSession("adminSession", { user: body.username });
-
+      window.location.href = "/hub";
+      return;
     } else {
-
       saveSession("workerSession", { user: body.username });
-
     }
 
     flash(`Sesion ${res.role === "admin" ? "admin" : "operario"} iniciada`);
@@ -833,6 +834,10 @@ function parseAlbaranPayload(text) {
 
   } catch (_e) {
 
+    /* ignore */
+  }
+
+  try {
     const params = new URLSearchParams(text);
 
     if ([...params.keys()].length) {
@@ -845,15 +850,12 @@ function parseAlbaranPayload(text) {
 
         note: params.get("note") || "",
 
-    };
+      };
 
+    }
+  } catch (_e) {
+    /* ignore */
   }
-
-  document.querySelectorAll(".admin-only-button").forEach((el) => {
-    el.style.display = admin ? "inline-flex" : "none";
-  });
-
-}
 
   return null;
 
@@ -1662,7 +1664,9 @@ function renderReportsChart(rows, centersMap, filters) {
 
   const maxMinutes = Math.max(...filtered.map((r) => r.minutes), 1);
 
-  box.innerHTML = Object.entries(grouped)
+  const totalMinutes = filtered.reduce((sum, r) => sum + r.minutes, 0);
+
+  const cards = Object.entries(grouped)
     .map(([centerId, list]) => {
       const centerName = centersMap[centerId]?.name || centerId;
       const byWorker = list.reduce((acc, row) => {
@@ -1690,6 +1694,15 @@ function renderReportsChart(rows, centersMap, filters) {
       `;
     })
     .join("");
+
+  box.innerHTML = `
+    <div class="row" style="gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+      <span class="chip soft">Paradas: ${filtered.length}</span>
+      <span class="chip soft">Min totales: ${totalMinutes}</span>
+      <span class="chip soft">Centros: ${Object.keys(grouped).length}</span>
+    </div>
+    <div class="mini-grid">${cards}</div>
+  `;
 }
 
 async function initReports() {
@@ -1739,6 +1752,55 @@ async function initReports() {
   workerSelect?.addEventListener("change", render);
 
   render();
+}
+
+async function initAlertsPage() {
+  refreshSessionBadges();
+  const adminSession = getSession("adminSession");
+  if (!adminSession) {
+    flash("Inicia sesion de admin para ver alertas.");
+    window.location.href = "/";
+    return;
+  }
+  const load = async () => {
+    const state = await fetchState();
+    renderAlarms(state.alerts || [], "alert-wall-full");
+  };
+  load();
+  setInterval(load, 15000);
+}
+
+async function initMapPage() {
+  refreshSessionBadges();
+  const adminSession = getSession("adminSession");
+  if (!adminSession) {
+    flash("Inicia sesion de admin para ver el mapa.");
+    window.location.href = "/";
+    return;
+  }
+  ensureGlobalQRButton();
+  const load = async () => {
+    const state = await fetchState();
+    renderMap(state, "map-full");
+    renderTruckStatusColumns(state.trucks || [], state.routes || []);
+  };
+  load();
+  setInterval(load, 15000);
+}
+
+async function initHub() {
+  refreshSessionBadges();
+  const adminSession = getSession("adminSession");
+  if (!adminSession) {
+    window.location.href = "/";
+    return;
+  }
+  document.querySelectorAll("[data-hub-link]").forEach((btn) => {
+    btn.onclick = () => {
+      const target = btn.getAttribute("data-hub-link");
+      if (target) window.location.href = target;
+    };
+  });
 }
 
 function renderWorkerRoutes(state) {
@@ -2236,6 +2298,8 @@ async function initHome() {
     if (res.role === "admin") {
       clearSession("workerSession");
       saveSession("adminSession", { user: body.username });
+      window.location.href = "/hub";
+      return;
     } else {
       clearSession("adminSession");
       saveSession("workerSession", { user: body.username });
@@ -2266,6 +2330,8 @@ async function loadHome() {
   const adminButtons = document.querySelectorAll(".admin-only-button");
   adminButtons.forEach((el) => (el.style.display = adminSession ? "inline-flex" : "none"));
   toggleGate(!hasSession);
+  if (adminSession) {
+  }
   if (!hasSession) return;
 
   ensureGlobalQRButton();
@@ -2313,7 +2379,7 @@ function ensureWorkerSession() {
 function requireWorkerSession(redirectTo = "/trabajador") {
   const session = ensureWorkerSession();
   if (!session) {
-    window.location.href = redirectTo;
+    window.location.href = "/";
     return null;
   }
   return session;
@@ -2437,6 +2503,48 @@ function renderTruckGrid(trucks) {
 
 }
 
+
+
+function renderTruckStatusColumns(trucks, routes = []) {
+  const availableBox = document.getElementById("truck-available");
+  const activeBox = document.getElementById("truck-active");
+  if (!availableBox || !activeBox) return;
+  availableBox.innerHTML = "";
+  activeBox.innerHTML = "";
+  const routeByTruck = routes.reduce((acc, r) => {
+    if (r.truck_id) acc[r.truck_id] = r;
+    return acc;
+  }, {});
+  const buildCard = (tr) => {
+    const route = routeByTruck[tr.id];
+    const status = route ? routeStatusLabel[route.status] || route.status : truckStatusLabel[tr.status] || tr.status;
+    const worker = route?.worker || tr.driver || "-";
+    const routeId = route?.id || tr.route_id || "Sin ruta";
+    const dest = tr.destination?.name || route?.origin || "Almacen";
+    const card = document.createElement("div");
+    card.className = "truck-card";
+    card.innerHTML = `
+      <div class="row spaced">
+        <strong>${tr.id}</strong>
+        <span class="status ${route ? "warn" : "ok"}">${status}</span>
+      </div>
+      <div class="muted small">Operario: ${worker}</div>
+      <div class="tank-meta">
+        <span>${routeId}</span>
+        <span>${dest}</span>
+      </div>
+      <div class="tank-meta">
+        <span>${formatLiters(tr.current_load_l)}</span>
+        <span>${truckStatusLabel[tr.status] || tr.status}</span>
+      </div>
+    `;
+    return card;
+  };
+  trucks.forEach((tr) => {
+    const target = tr.status === "parked" ? availableBox : activeBox;
+    target.appendChild(buildCard(tr));
+  });
+}
 
 
 function renderMiniCenters(centers) {
@@ -2858,7 +2966,7 @@ async function initDestino() {
 
     const session = ensureWorkerSession();
     if (!session) {
-      window.location.href = "/trabajador";
+    window.location.href = "/";
       return;
     }
 
@@ -3100,7 +3208,7 @@ async function initLlegada() {
 
     const session = ensureWorkerSession();
     if (!session) {
-      window.location.href = "/trabajador";
+    window.location.href = "/";
       return;
     }
 
@@ -3470,6 +3578,7 @@ async function initAdmin() {
   const adminSession = getSession("adminSession");
 
   let adminState = null;
+  const routeFilters = { status: "all", worker: "all", truck: "all", center: "all", type: "all" };
 
 
 
@@ -3532,18 +3641,104 @@ async function initAdmin() {
 
   const renderRouteTable = (state) => {
     const box = document.getElementById("admin-route-table");
+    const statusSelect = document.getElementById("filter-route-status");
+    const workerSelect = document.getElementById("filter-route-worker");
+    const truckSelect = document.getElementById("filter-route-truck");
+    const centerSelect = document.getElementById("filter-route-center");
+    const typeSelect = document.getElementById("filter-route-type");
     if (!box) return;
+
+    const combined = [...(state.routes || []), ...(state.route_history || [])];
+    const statuses = Array.from(new Set(combined.map((r) => r.status).filter(Boolean)));
+    const workers = Array.from(new Set(combined.map((r) => r.worker || "sin_operario"))).filter(Boolean);
+    const trucks = state.trucks || [];
+    const centers = Array.from(
+      new Set(
+        combined.flatMap((r) => (r.stops || []).map((s) => s.center_id).filter(Boolean))
+      )
+    );
+
+    if (statusSelect) {
+      statusSelect.innerHTML =
+        `<option value="all">Todos</option>` +
+        statuses.map((s) => `<option value="${s}">${routeStatusLabel[s] || s}</option>`).join("");
+      statusSelect.value = routeFilters.status;
+      statusSelect.onchange = (e) => {
+        routeFilters.status = e.target.value || "all";
+        renderRouteTable(state);
+      };
+    }
+
+    if (workerSelect) {
+      workerSelect.innerHTML =
+        `<option value="all">Todos</option>` +
+        workers.map((w) => `<option value="${w}">${w}</option>`).join("");
+      workerSelect.value = routeFilters.worker;
+      workerSelect.onchange = (e) => {
+        routeFilters.worker = e.target.value || "all";
+        renderRouteTable(state);
+      };
+    }
+
+    if (truckSelect) {
+      truckSelect.innerHTML =
+        `<option value="all">Todos</option>` +
+        trucks.map((t) => `<option value="${t.id}">${t.id}</option>`).join("");
+      truckSelect.value = routeFilters.truck;
+      truckSelect.onchange = (e) => {
+        routeFilters.truck = e.target.value || "all";
+        renderRouteTable(state);
+      };
+    }
+
+    if (centerSelect) {
+      centerSelect.innerHTML =
+        `<option value="all">Todos</option>` +
+        centers.map((c) => `<option value="${c}">${c}</option>`).join("");
+      centerSelect.value = routeFilters.center;
+      centerSelect.onchange = (e) => {
+        routeFilters.center = e.target.value || "all";
+        renderRouteTable(state);
+      };
+    }
+
+    if (typeSelect) {
+      typeSelect.innerHTML = `
+        <option value="all">Todos</option>
+        <option value="auto">Auto</option>
+        <option value="manual">Manual</option>
+      `;
+      typeSelect.value = routeFilters.type;
+      typeSelect.onchange = (e) => {
+        routeFilters.type = e.target.value || "all";
+        renderRouteTable(state);
+      };
+    }
+
+    const matchesFilters = (r) => {
+      const statusOk = routeFilters.status === "all" || r.status === routeFilters.status;
+      const workerOk =
+        routeFilters.worker === "all" || (r.worker || "sin_operario") === routeFilters.worker;
+      const truckOk = routeFilters.truck === "all" || r.truck_id === routeFilters.truck;
+      const typeOk =
+        routeFilters.type === "all" ||
+        (routeFilters.type === "auto" ? r.auto_generated : !r.auto_generated);
+      const centerOk =
+        routeFilters.center === "all" ||
+        (r.stops || []).some((s) => s.center_id === routeFilters.center);
+      return statusOk && workerOk && truckOk && typeOk && centerOk;
+    };
 
     const cards = [];
 
-    state.routes.forEach((r) => {
+    state.routes.filter(matchesFilters).forEach((r) => {
       const stop = r.stops?.[r.current_stop_idx] || r.stops?.[r.stops.length - 1];
       const center = state.centers.find((c) => c.id === stop?.center_id);
       const tank = center?.tanks.find((t) => t.id === stop?.tank_id);
       cards.push({ data: r, destino: `${center ? center.name : stop?.center_id || "-"} / ${tank ? tank.label : stop?.tank_id || ""}` });
     });
 
-    state.route_history.slice(0, 12).forEach((r) => {
+    state.route_history.filter(matchesFilters).slice(0, 12).forEach((r) => {
       const lastStop = r.stops?.[r.stops.length - 1];
       cards.push({ data: r, destino: `${lastStop?.center_id || "-"} / ${lastStop?.tank_id || ""}` });
     });
@@ -3566,6 +3761,14 @@ async function initAdmin() {
             <div class="micro-meta" aria-hidden="true">
               <span>${data.truck_id}</span>
               <span>${data.stops?.length || 0} paradas</span>
+            </div>
+            <div class="micro-meta" aria-hidden="true">
+              <span>${data.worker || "Pendiente"}</span>
+              <span>${data.auto_generated ? "Auto" : "Manual"}</span>
+            </div>
+            <div class="micro-meta" aria-hidden="true">
+              <span>${destino}</span>
+              <span>${formatLiters(data.total_delivered || data.planned_load_l || 0)}</span>
             </div>
             <button class="mini-btn" data-route="${data.id}">Más detalle</button>
           </div>
@@ -3921,20 +4124,8 @@ async function initAdmin() {
     }
 
     saveSession("adminSession", { user: body.username });
-
     refreshSessionBadges();
-
-    loginPanel?.classList.add("hidden");
-
-    content?.classList.remove("hidden");
-
-    if (sessionLabel) sessionLabel.textContent = `Sesion: ${body.username}`;
-
-    flash("Sesion admin iniciada");
-
-    load();
-
-    setInterval(load, 60000);
+    window.location.href = "/hub";
 
   });
 
@@ -3965,6 +4156,12 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "center") initCenterPage();
 
   if (page === "reports") initReports();
+
+  if (page === "alerts") initAlertsPage();
+
+  if (page === "map") initMapPage();
+
+  if (page === "hub") initHub();
 
   if (page === "scan") initScan();
 

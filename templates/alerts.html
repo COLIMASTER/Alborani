@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Panel de alertas - Alborani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="alerts">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/static/images.jpg" alt="Alborani logo" class="brand-logo" />
+        <div>
+          <div class="brand-title">Alborani Agr&iacute;cola</div>
+          <div class="brand-sub">Panel de alertas</div>
+        </div>
+      </div>
+      <div class="top-right">
+        <nav class="top-links">
+          <a href="/">Inicio</a>
+          <a href="/alertas" class="admin-only-button">Panel de alertas</a>
+          <a href="/mapa" class="admin-only-button">Mapa</a>
+          <a href="/informes" class="admin-only-button">Informes</a>
+          <a href="/admin" class="admin-only-button">Panel rutas</a>
+        </nav>
+        <button class="mini-btn" id="session-toggle" type="button">Sesion</button>
+      </div>
+    </header>
+
+    <main class="layout narrow">
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Alertas globales</div>
+            <h2>Dep&oacute;sitos en riesgo</h2>
+            <p class="muted small">Listado compacto y actualizado.</p>
+          </div>
+          <div class="row" style="gap:8px;">
+            <a class="mini-btn ghost" href="/">Volver a inicio</a>
+          </div>
+        </div>
+        <div id="alert-wall-full" class="alert-wall minimal"></div>
+      </section>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

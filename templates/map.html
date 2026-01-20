@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Centro - Alborani</title>
+    <title>Mapa - Alborani</title>
     <link
       rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
@@ -18,79 +18,58 @@
     />
     <link rel="stylesheet" href="/static/style.css" />
   </head>
-  <body data-page="center" data-center-id="{{ center_id }}">
+  <body data-page="map">
     <header class="topbar">
       <div class="brand">
         <img src="/static/images.jpg" alt="Alborani logo" class="brand-logo" />
         <div>
           <div class="brand-title">Alborani Agr&iacute;cola</div>
-          <div class="brand-sub">Centro</div>
+          <div class="brand-sub">Mapa y flota</div>
         </div>
       </div>
       <div class="top-right">
-        <button class="mini-btn" id="session-toggle" type="button">Sesion</button>
         <nav class="top-links">
-          <a href="/">Vista general</a>
+          <a href="/">Inicio</a>
           <a href="/alertas" class="admin-only-button">Panel de alertas</a>
           <a href="/mapa" class="admin-only-button">Mapa</a>
           <a href="/informes" class="admin-only-button">Informes</a>
           <a href="/admin" class="admin-only-button">Panel rutas</a>
         </nav>
-        <img src="/static/logo.png" alt="Savian logo" class="extra-logo" />
+        <button class="mini-btn" id="session-toggle" type="button">Sesion</button>
       </div>
     </header>
 
-    <main class="layout narrow">
+    <main class="layout">
       <section class="panel">
         <div class="panel-head">
           <div>
-            <div class="caps">Centro</div>
-            <h2 id="center-title">Cargando...</h2>
-            <div id="center-sub" class="muted small"></div>
-          </div>
-          <div class="chip soft" id="center-status"></div>
-        </div>
-        <div id="center-tanks" class="focus-grid"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <div class="caps">Datos por invernadero</div>
-          </div>
-        </div>
-        <div id="center-matrix" class="matrix-table"></div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <div class="caps">Alertas del centro</div>
-          </div>
-        </div>
-        <div id="center-alerts" class="alert-wall compact"></div>
-      </section>
-
-      <section class="split wide">
-        <div class="panel">
-          <div class="panel-head">
             <div class="caps">Mapa</div>
+            <h2>Flota y centros</h2>
+            <p class="muted small">Vista completa con camiones y destinos.</p>
           </div>
-          <div id="map" class="map"></div>
         </div>
-        <div class="panel">
-          <div class="panel-head">
-            <div class="caps">Rutas</div>
-          </div>
-          <div id="center-routes" class="route-list compact"></div>
-        </div>
+        <div id="map-full" class="map"></div>
       </section>
 
-      <div class="row spaced" style="margin-top:12px;">
-        <a class="mini-btn" href="/">Volver a inicio</a>
-      </div>
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Camiones</div>
+            <p class="muted small">Disponibles y en ruta.</p>
+          </div>
+        </div>
+        <div class="split wide">
+          <div class="mini-panel">
+            <div class="caps tiny">En almac&eacute;n</div>
+            <div id="truck-available" class="truck-grid compact"></div>
+          </div>
+          <div class="mini-panel">
+            <div class="caps tiny">En ruta</div>
+            <div id="truck-active" class="truck-grid compact"></div>
+          </div>
+        </div>
+      </section>
     </main>
-
     <div id="toast" class="toast"></div>
     <script
       src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"

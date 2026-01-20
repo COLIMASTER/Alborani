@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Accesos - Alborani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="hub">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/static/images.jpg" alt="Alborani logo" class="brand-logo" />
+        <div>
+          <div class="brand-title">Alborani Agr&iacute;cola</div>
+          <div class="brand-sub">Accesos</div>
+        </div>
+      </div>
+      <div class="top-right">
+        <nav class="top-links">
+          <a href="/">Dep&oacute;sitos</a>
+          <a href="/alertas" class="admin-only-button">Alertas</a>
+          <a href="/mapa" class="admin-only-button">Mapa</a>
+          <a href="/informes" class="admin-only-button">Informes</a>
+          <a href="/admin" class="admin-only-button">Panel rutas</a>
+        </nav>
+        <button class="mini-btn" id="session-toggle" type="button">Sesion</button>
+      </div>
+    </header>
+
+    <main class="layout hub-layout">
+      <div class="hub-board">
+        <div class="hub-grid">
+          <button class="hub-card" data-hub-link="/">
+            <img src="/static/svg/depositos.png" alt="Dep&oacute;sitos" />
+            <div class="hub-label">Dep&oacute;sitos</div>
+          </button>
+          <button class="hub-card" data-hub-link="/informes">
+            <img src="/static/svg/informe.png" alt="Informes" />
+            <div class="hub-label">Informes</div>
+          </button>
+          <button class="hub-card" data-hub-link="/mapa">
+            <img src="/static/svg/mapa.png" alt="Mapa" />
+            <div class="hub-label">Mapa</div>
+          </button>
+          <button class="hub-card" data-hub-link="/admin">
+            <img src="/static/svg/ruta.png" alt="Panel de rutas" />
+            <div class="hub-label">Panel de rutas</div>
+          </button>
+          <button class="hub-card" data-hub-link="/alertas">
+            <img src="/static/svg/alert.svg" alt="Alertas" />
+            <div class="hub-label">Alertas</div>
+          </button>
+        </div>
+      </div>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
