@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Login | Alborani</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body data-page="login">
+    <main class="layout" style="max-width:640px; margin:0 auto;">
+      <section class="panel gate-card" style="margin-top:8vh;">
+        <div class="panel-head">
+          <div>
+            <div class="caps">Acceso seguro</div>
+            <h2>Iniciar sesion</h2>
+            <p class="muted small">Autenticacion contra API Savian con renovacion automatica del token.</p>
+          </div>
+        </div>
+        <form id="auth-login-form" class="stack">
+          <label>Usuario<input name="username" placeholder="testsensor@savian.ai" required /></label>
+          <label>Contrasena<input type="password" name="password" placeholder="••••••••" required /></label>
+          <button class="btn" type="submit">Entrar</button>
+        </form>
+        <p class="muted small" id="auth-login-hint"></p>
+      </section>
+    </main>
+    <div id="toast" class="toast"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

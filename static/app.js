@@ -11,8 +11,34 @@ let lastState = null;
 let qrScannerWidget = null;
 
 let selectedCenterId = null;
+let selectedMapCenterId = null;
 
 const logFilters = { range: "24h", worker: "all", center: "all" };
+const mapCenterWhitelist = new Set([
+  "hornillos",
+  "los hornillos",
+  "cortezones",
+  "los cortezones",
+  "eurogold",
+  "los matias",
+  "matias",
+]);
+
+function normalizeCenterName(name) {
+  return String(name || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isCenterEnabledOnMap(name) {
+  const key = normalizeCenterName(name);
+  if (mapCenterWhitelist.has(key)) return true;
+  if (key.startsWith("los ")) return mapCenterWhitelist.has(key.slice(4));
+  return mapCenterWhitelist.has(`los ${key}`);
+}
 
 function ensureGlobalQRButton() {
   /* QR por URL, sin boton flotante */
@@ -50,13 +76,15 @@ const statusColor = {
 
 const severityRank = {
 
+  critical: 4,
+
   alert: 3,
 
-  critical: 2,
+  warn: 2,
 
-  warn: 1,
+  ok: 1,
 
-  ok: 0,
+  unknown: 0,
 
 };
 
@@ -136,6 +164,23 @@ function flash(text) {
 
 
 
+async function parseJSONResponse(res) {
+  try {
+    return await res.json();
+  } catch (_e) {
+    return {};
+  }
+}
+
+async function forceLoginRedirect() {
+  clearSession("workerSession");
+  clearSession("adminSession");
+  clearSession("activeRouteId");
+  if (window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
 async function postJSON(url, body) {
 
   const res = await fetch(url, {
@@ -143,12 +188,17 @@ async function postJSON(url, body) {
     method: "POST",
 
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
 
     body: JSON.stringify(body),
 
   });
 
-  return res.json();
+  if (res.status === 401 && url !== "/api/login") {
+    await forceLoginRedirect();
+    return { ok: false, error: "Sesion expirada" };
+  }
+  return parseJSONResponse(res);
 
 }
 
@@ -156,14 +206,57 @@ async function postJSON(url, body) {
 
 async function fetchState() {
 
-  const res = await fetch("/api/state");
+  const res = await fetch("/api/state", { credentials: "same-origin" });
 
-  lastState = await res.json();
+  if (res.status === 401) {
+    await forceLoginRedirect();
+    throw new Error("Sesion expirada");
+  }
+
+  lastState = await parseJSONResponse(res);
+
+  if (!res.ok) {
+    const msg = lastState?.error || `Error al cargar estado (${res.status})`;
+    throw new Error(msg);
+  }
 
   saveCachedState(lastState);
 
   return lastState;
 
+}
+
+async function ensureBrowserSessionFromServer() {
+  const local = getSession("adminSession") || getSession("workerSession");
+  if (local) return local;
+  try {
+    const res = await fetch("/api/auth/status", { credentials: "same-origin" });
+    if (!res.ok) return null;
+    const data = await parseJSONResponse(res);
+    if (!data?.authenticated) return null;
+    saveSession("adminSession", { user: data.user || "usuario" });
+    return data;
+  } catch (_e) {
+    return null;
+  }
+}
+
+async function logoutAllSessions(options = {}) {
+  const redirectToLogin = options.redirect !== false;
+  try {
+    await fetch("/api/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: "{}",
+    });
+  } catch (_e) {
+    /* ignore */
+  }
+  clearSession("workerSession");
+  clearSession("adminSession");
+  clearSession("activeRouteId");
+  if (redirectToLogin) window.location.href = "/login";
 }
 
 
@@ -363,6 +456,35 @@ function consumePendingScan() {
   }
 }
 
+function savePendingScan(payload) {
+  try {
+    if (!payload) return;
+    localStorage.setItem("pendingScan", JSON.stringify(payload));
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+function saveFlowNotice(text) {
+  try {
+    if (!text) return;
+    localStorage.setItem("qrFlowNotice", String(text));
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
+function consumeFlowNotice() {
+  try {
+    const raw = localStorage.getItem("qrFlowNotice");
+    if (!raw) return null;
+    localStorage.removeItem("qrFlowNotice");
+    return raw;
+  } catch (_e) {
+    return null;
+  }
+}
+
 function parseQRContent(raw) {
   const text = String(raw || "").trim();
   if (!text) return null;
@@ -520,16 +642,11 @@ function refreshSessionBadges() {
   document.querySelectorAll("#session-worker").forEach((el) => {
     el.classList.add("session-chip");
     el.innerHTML = `<span>${label}</span><button class="mini-btn" type="button" data-session-action="${active ? "logout" : "login"}">${actionLabel}</button>`;
-    el.querySelector("button")?.addEventListener("click", () => {
+    el.querySelector("button")?.addEventListener("click", async () => {
       const mode = active ? "logout" : "login";
       if (mode === "logout") {
-        clearSession("workerSession");
-        clearSession("adminSession");
-        clearSession("activeRouteId");
         flash("Sesion cerrada");
-        toggleGate(true);
-        refreshSessionBadges();
-        window.location.href = "/";
+        await logoutAllSessions();
         return;
       }
       window.openSessionModal?.("worker");
@@ -546,16 +663,11 @@ function refreshSessionBadges() {
     topBtn.style.display = active ? "inline-flex" : "none";
 
     topBtn.setAttribute("data-session-action", active ? "logout" : "login");
-    topBtn.onclick = () => {
+    topBtn.onclick = async () => {
       const mode = topBtn.getAttribute("data-session-action");
       if (mode === "logout") {
-        clearSession("workerSession");
-        clearSession("adminSession");
-        clearSession("activeRouteId");
         flash("Sesion cerrada");
-        refreshSessionBadges();
-        toggleGate(true);
-        window.location.href = "/";
+        await logoutAllSessions();
         return;
       }
       window.openSessionModal?.("worker");
@@ -567,7 +679,7 @@ function refreshSessionBadges() {
 
   document.querySelectorAll("[data-session-action]").forEach((btn) => {
 
-    btn.onclick = () => {
+    btn.onclick = async () => {
 
       const workerSession = ensureWorkerSession();
 
@@ -576,22 +688,8 @@ function refreshSessionBadges() {
       const mode = btn.getAttribute("data-session-action");
 
       if (mode === "logout" && (workerSession || adminSession)) {
-
-        clearSession("workerSession");
-
-        clearSession("adminSession");
-
-        clearSession("activeRouteId");
-
         flash("Sesion cerrada");
-
-        refreshSessionBadges();
-
-        const hint = document.getElementById("session-hint");
-
-        if (hint) hint.textContent = "Sesion no iniciada";
-
-        window.location.href = "/";
+        await logoutAllSessions();
 
         return;
 
@@ -607,6 +705,30 @@ function refreshSessionBadges() {
     el.style.display = admin ? "inline-flex" : "none";
   });
 
+}
+
+function tankSeverityScore(tank) {
+  const status = tank?.status || "unknown";
+  const rank = severityRank[status] ?? severityRank.unknown;
+  const pct = Number.isFinite(Number(tank?.percentage)) ? Number(tank.percentage) : 100;
+  return rank * 1000 + (100 - pct);
+}
+
+function sortTanksBySeverity(tanks = []) {
+  return [...(tanks || [])].sort((a, b) => tankSeverityScore(b) - tankSeverityScore(a));
+}
+
+function tankStatusLabel(status) {
+  if (status === "critical") return "Alerta roja";
+  if (status === "alert") return "Alerta";
+  if (status === "warn") return "Precaucion";
+  return "Normal";
+}
+
+function tankToneClass(status) {
+  if (status === "critical") return "priority-critical vibrate-red";
+  if (status === "alert" || status === "warn") return "priority-warn vibrate-warn";
+  return "priority-ok";
 }
 
 
@@ -777,25 +899,11 @@ function ensureSessionModal() {
 
 
 
-  document.getElementById("session-logout-btn")?.addEventListener("click", () => {
-
-    clearSession("workerSession");
-
-    clearSession("adminSession");
-
-    clearSession("activeRouteId");
-
+  document.getElementById("session-logout-btn")?.addEventListener("click", async () => {
     flash("Sesion cerrada");
-
-    refreshSessionBadges();
-
-    toggleGate(true);
-
     updateHint();
-
     closeSessionModal();
-    window.location.href = "/";
-
+    await logoutAllSessions();
   });
 
 
@@ -918,16 +1026,21 @@ function renderCenters(centers, targetId = "center-grid", options = {}) {
     card.type = "button";
     const worst = worstStatus(c.tanks || []);
     card.className = `micro-card severity-${worst}`;
-    const mini = (c.tanks || []).slice(0, 3);
+    const sorted = sortTanksBySeverity(c.tanks || []);
+    const preview = sorted.slice(0, 6);
+    const hiddenCount = Math.max(0, sorted.length - preview.length);
     card.innerHTML = `
       <div class="micro-head">
         <span class="name">${c.name}</span>
-        <span class="pill tiny ${worst}">${
-          worst === "critical" ? "ALTA" : worst === "alert" ? "ALERTA" : worst === "warn" ? "PRE" : "OK"
-        }</span>
+        <div class="micro-head-right">
+          <span class="count-pill">${sorted.length} dep.</span>
+          <span class="pill tiny ${worst}">${
+            worst === "critical" ? "ALTA" : worst === "alert" ? "ALERTA" : worst === "warn" ? "PRE" : "OK"
+          }</span>
+        </div>
       </div>
       <div class="nano-row">
-        ${mini
+        ${preview
           .map((t, idx) => {
             const color = statusColor[t.status] || statusColor.ok;
             const pct = Math.max(0, Math.min(t.percentage || 0, 100));
@@ -943,6 +1056,7 @@ function renderCenters(centers, targetId = "center-grid", options = {}) {
             `;
           })
           .join("")}
+        ${hiddenCount > 0 ? `<div class="nano-more">+${hiddenCount}</div>` : ""}
       </div>
     `;
     if (canFocus) {
@@ -975,23 +1089,36 @@ function renderCenterDetail(center, opts = {}) {
     badge.className = `chip soft severity-${worst}`;
   }
   panel.innerHTML = "";
-  center.tanks?.forEach((t, idx) => {
+
+  const sorted = sortTanksBySeverity(center.tanks || []);
+  sorted.forEach((t, idx) => {
     const pct = Math.max(0, Math.min(t.percentage || 0, 100));
     const fillPct = Math.max(6, pct);
     const color = statusColor[t.status] || statusColor.ok;
-    const etaText = formatEta(t.runout_eta);
-    const etaShort = formatHoursLeft(t.runout_hours);
+    const statusText = tankStatusLabel(t.status);
+    const desc = t.description || t.product || "-";
+    const lastReading = formatEtaDateTime(t.last_reading || t.runout_eta);
+    const toneClass = tankToneClass(t.status);
     const card = document.createElement("div");
-    card.className = "focus-tank";
+    card.className = `focus-tank compact ${toneClass}`;
     card.innerHTML = `
-      <div class="focus-jar">
-        <span class="focus-index">${idx + 1}</span>
-        <div class="focus-fill" style="height:${fillPct}%;background:${color};"></div>
+      <div class="focus-main">
+        <div class="focus-jar">
+          <span class="focus-index">${idx + 1}</span>
+          <div class="focus-fill" style="height:${fillPct}%;background:${color};"></div>
+        </div>
+        <div class="focus-meta">
+          <div class="focus-head">
+            <strong>${t.label || "-"}</strong>
+            <span class="pill tiny ${t.status || "ok"}">${statusText}</span>
+          </div>
+          <div class="focus-line">${formatLiters(t.current_l)} / ${formatLiters(t.capacity_l)}</div>
+          <div class="focus-line muted">${pct}% - ${shortText(desc, 28)}</div>
+        </div>
       </div>
-      <div class="focus-meta">
-        <div class="focus-line">${pct}% - ${compactProduct(t.product)}</div>
-        <div class="muted small">${formatLiters(t.capacity_l)} • Falta ${formatLiters(t.deficit_l || 0)}</div>
-        <div class="muted small">Reponer: ${etaText}${etaShort ? " (" + etaShort + ")" : ""}</div>
+      <div class="focus-footer">
+        <span class="muted small">Lectura: ${lastReading}</span>
+        <span class="muted small">ID ${t.id_depositos_pantalla_elemento ?? "-"}</span>
       </div>
     `;
     panel.appendChild(card);
@@ -1220,90 +1347,112 @@ function renderSensorDetail(centers) {
 
 
 
-function renderAlarms(alerts, targetId = "alarms-panel") {
-
-  const box = document.getElementById(targetId);
-
-  if (!box) return;
-
-  box.innerHTML = "";
-
-  if (!alerts.length) {
-
-    box.innerHTML = `<div class="muted small">Sin alarmas activas</div>`;
-
-    return;
-
+function buildAlertRows(alerts = [], state = null) {
+  const rows = [];
+  if (state?.centers?.length) {
+    (state.centers || []).forEach((center) => {
+      sortTanksBySeverity(center.tanks || [])
+        .filter((t) => ["warn", "alert", "critical"].includes(t.status))
+        .forEach((tank) => {
+          rows.push({
+            center: center.name,
+            center_id: center.id,
+            tank_id: tank.id,
+            tank_label: tank.label || tank.id,
+            status: tank.status || "warn",
+            percentage: Number(tank.percentage || 0),
+            liters: tank.current_l,
+            capacity: tank.capacity_l,
+            last_reading: tank.last_reading,
+            message: tank.description || tank.product || "",
+          });
+        });
+    });
+  } else {
+    (alerts || []).forEach((a) => {
+      const pctMatch = String(a.message || "").match(/([0-9]+\\.?[0-9]*)%/);
+      const pct = pctMatch ? Number(pctMatch[1]) : 0;
+      rows.push({
+        center: a.center || "-",
+        center_id: a.center_id || a.center || "-",
+        tank_id: a.tank_id || "-",
+        tank_label: a.tank_id || "-",
+        status: a.status || (a.severity === "alta" ? "critical" : "warn"),
+        percentage: pct,
+        liters: null,
+        capacity: null,
+        last_reading: a.runout_eta || null,
+        message: a.message || "",
+      });
+    });
   }
 
-  const grouped = alerts.reduce((acc, a) => {
-    acc[a.center] = acc[a.center] || [];
-    acc[a.center].push(a);
-    return acc;
-  }, {});
+  rows.sort((a, b) => {
+    const rankDiff = (severityRank[b.status] ?? 0) - (severityRank[a.status] ?? 0);
+    if (rankDiff !== 0) return rankDiff;
+    return (a.percentage ?? 100) - (b.percentage ?? 100);
+  });
+  return rows;
+}
 
-  const parsePct = (a) => {
-    const pctMatch = (a.message || "").match(/([0-9]+\\.?[0-9]*)%/);
-    return pctMatch ? parseFloat(pctMatch[1]) : 100;
-  };
+function renderAlarms(alerts, targetId = "alarms-panel", state = null) {
+  const box = document.getElementById(targetId);
+  if (!box) return;
+  box.innerHTML = "";
 
-  const groups = Object.entries(grouped)
-    .map(([center, list]) => {
-      const sevRank = list.some((a) => a.severity === "alta") ? 2 : 1;
-      const minPct = Math.min(...list.map(parsePct));
-      return { center, list, sevRank, minPct };
-    })
-    .sort((a, b) => {
-      if (b.sevRank !== a.sevRank) return b.sevRank - a.sevRank;
-      return a.minPct - b.minPct;
-    });
+  const rows = buildAlertRows(alerts || [], state);
+  if (!rows.length) {
+    box.innerHTML = `<div class="muted small">Sin alarmas activas</div>`;
+    return;
+  }
 
-  groups.forEach(({ center, list, sevRank }) => {
-    const color = sevRank === 2 ? statusColor.critical : statusColor.warn;
-    const items = list
-      .slice()
-      .sort((a, b) => {
-        const sa = a.severity === "alta" ? 2 : 1;
-        const sb = b.severity === "alta" ? 2 : 1;
-        if (sb !== sa) return sb - sa;
-        return parsePct(a) - parsePct(b);
-      })
-      .map((a) => {
-        const pct = parsePct(a);
-        const eta = a.runout_eta ? formatEta(a.runout_eta) : "";
-        return `<div class="alert-chip">
-          <span>${a.tank_id}</span>
-          <span>${Number.isFinite(pct) ? pct + "%" : ""}</span>
-          <span>${eta ? eta : ""}</span>
-        </div>`;
-      })
-      .join("");
+  rows.forEach((row) => {
+    const tone = tankToneClass(row.status);
+    const statusText = tankStatusLabel(row.status);
     const card = document.createElement("div");
-    card.className = "alert-card grouped";
+    card.className = `alert-card rich ${tone}`;
     card.innerHTML = `
       <div class="alert-top">
-        <span>${center}</span>
-        <span class="alert-dot" style="background:${color};"></span>
+        <span>${row.center}</span>
+        <span class="pill tiny ${row.status}">${statusText}</span>
       </div>
-      <div class="alert-mini">${items}</div>
+      <div class="alert-main">
+        <strong>${row.tank_label}</strong>
+        <span>${Math.round(row.percentage || 0)}%</span>
+      </div>
+      <div class="alert-mini">
+        <span>${formatLiters(row.liters)} / ${formatLiters(row.capacity)}</span>
+        <span>${formatEtaDateTime(row.last_reading)}</span>
+      </div>
     `;
     box.appendChild(card);
   });
-
 }
 
-function renderCenterAlerts(center, alerts) {
-
+function renderCenterAlerts(center, alerts, state = null) {
   const panel = document.getElementById("center-alerts");
-
   if (!panel) return;
-
-  const centerName = center?.name;
-
-  const filtered = (alerts || []).filter((a) => a.center === centerName);
-
-  renderAlarms(filtered, "center-alerts");
-
+  const rows = buildAlertRows(alerts || [], state).filter((item) => item.center_id === center?.id);
+  if (!rows.length) {
+    panel.innerHTML = `<div class="muted small">Sin alertas activas en este centro</div>`;
+    return;
+  }
+  panel.innerHTML = "";
+  rows.forEach((row) => {
+    const card = document.createElement("div");
+    card.className = `alert-card rich ${tankToneClass(row.status)}`;
+    card.innerHTML = `
+      <div class="alert-top">
+        <span>${row.tank_label}</span>
+        <span class="pill tiny ${row.status}">${tankStatusLabel(row.status)}</span>
+      </div>
+      <div class="alert-mini">
+        <span>${Math.round(row.percentage || 0)}%</span>
+        <span>${formatLiters(row.liters)} / ${formatLiters(row.capacity)}</span>
+      </div>
+    `;
+    panel.appendChild(card);
+  });
 }
 
 function renderCenterRoutes(center, state) {
@@ -1385,7 +1534,7 @@ function renderActiveRoutes(routes, centers) {
     card.innerHTML = `
 
       <div class="row">
-        <strong>${r.truck_id} · ${r.worker}</strong>
+        <strong>${r.truck_id} - ${r.worker}</strong>
         <span class="status ${statusClass}">${statusLabel}</span>
       </div>
       <div class="tank-meta">
@@ -1706,11 +1855,11 @@ function renderReportsChart(rows, centersMap, filters) {
 }
 
 async function initReports() {
+  await ensureBrowserSessionFromServer();
   const adminSession = getSession("adminSession");
   const label = document.getElementById("reports-session-label");
   if (!adminSession) {
-    flash("Inicia sesion de admin para ver informes.");
-    window.location.href = "/admin";
+    window.location.href = "/login";
     return;
   }
   if (label) label.textContent = `Sesion: ${adminSession.user}`;
@@ -1755,27 +1904,27 @@ async function initReports() {
 }
 
 async function initAlertsPage() {
+  await ensureBrowserSessionFromServer();
   refreshSessionBadges();
   const adminSession = getSession("adminSession");
   if (!adminSession) {
-    flash("Inicia sesion de admin para ver alertas.");
-    window.location.href = "/";
+    window.location.href = "/login";
     return;
   }
   const load = async () => {
     const state = await fetchState();
-    renderAlarms(state.alerts || [], "alert-wall-full");
+    renderAlarms(state.alerts || [], "alert-wall-full", state);
   };
   load();
   setInterval(load, 15000);
 }
 
 async function initMapPage() {
+  await ensureBrowserSessionFromServer();
   refreshSessionBadges();
   const adminSession = getSession("adminSession");
   if (!adminSession) {
-    flash("Inicia sesion de admin para ver el mapa.");
-    window.location.href = "/";
+    window.location.href = "/login";
     return;
   }
   ensureGlobalQRButton();
@@ -1789,10 +1938,11 @@ async function initMapPage() {
 }
 
 async function initHub() {
+  await ensureBrowserSessionFromServer();
   refreshSessionBadges();
   const adminSession = getSession("adminSession");
   if (!adminSession) {
-    window.location.href = "/";
+    window.location.href = "/login";
     return;
   }
   document.querySelectorAll("[data-hub-link]").forEach((btn) => {
@@ -1800,6 +1950,48 @@ async function initHub() {
       const target = btn.getAttribute("data-hub-link");
       if (target) window.location.href = target;
     };
+  });
+}
+
+async function initLoginPage() {
+  clearSession("workerSession");
+  clearSession("adminSession");
+  clearSession("activeRouteId");
+
+  const form = document.getElementById("auth-login-form");
+  const hint = document.getElementById("auth-login-hint");
+
+  try {
+    const res = await fetch("/api/auth/status", { credentials: "same-origin" });
+    if (res.ok) {
+      const data = await parseJSONResponse(res);
+      if (data?.authenticated) {
+        saveSession("adminSession", { user: data.user || "usuario" });
+        window.location.href = "/";
+        return;
+      }
+    }
+  } catch (_e) {
+    /* ignore */
+  }
+
+  form?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const body = {
+      username: form.username.value,
+      password: form.password.value,
+      role: "admin",
+    };
+    const res = await postJSON("/api/login", body);
+    if (!res.ok) {
+      const msg = res.error || "No se pudo iniciar sesion";
+      if (hint) hint.textContent = msg;
+      flash(msg);
+      return;
+    }
+    saveSession("adminSession", { user: body.username });
+    if (hint) hint.textContent = "";
+    window.location.href = "/";
   });
 }
 
@@ -1847,7 +2039,7 @@ function renderWorkerRoutes(state) {
 
       card.innerHTML = `
         <div class="row">
-          <strong>${r.truck_id} · ${r.id}</strong>
+          <strong>${r.truck_id} - ${r.id}</strong>
           <span class="status badge">${routeStatusLabel[r.status] || r.status}</span>
         </div>
         <div class="tank-meta">
@@ -1885,7 +2077,7 @@ function renderWorkerRoutes(state) {
       const firstStop = r.stops?.[0];
       const lastStop = r.stops?.[r.stops.length - 1];
       const centerName = firstStop?.center_id || "-";
-      li.innerHTML = `<strong>${r.id}</strong> ${r.truck_id} · ${centerName} · ${formatLiters(r.total_delivered || 0)} · <span class="chip soft">${routeStatusLabel[r.status] || r.status}</span> · ${formatDatePlus1(r.finished_at || r.started_at)}`;
+      li.innerHTML = `<strong>${r.id}</strong> ${r.truck_id} - ${centerName} - ${formatLiters(r.total_delivered || 0)} - <span class="chip soft">${routeStatusLabel[r.status] || r.status}</span> - ${formatDatePlus1(r.finished_at || r.started_at)}`;
 
       historyBox.appendChild(li);
 
@@ -2167,6 +2359,41 @@ function truckPopup(tr) {
 
 }
 
+function renderMapCenterDeposits(center, targetId = "map-center-deposits", titleId = "map-center-title") {
+  const box = document.getElementById(targetId);
+  const title = document.getElementById(titleId);
+  if (!box) return;
+  if (!center) {
+    box.innerHTML = `<div class="muted small">Selecciona un centro en el mapa.</div>`;
+    if (title) title.textContent = "Depositos del centro";
+    return;
+  }
+  if (title) title.textContent = `Depositos - ${center.name}`;
+  const rows = sortTanksBySeverity(center.tanks || []);
+  if (!rows.length) {
+    box.innerHTML = `<div class="muted small">Sin depositos.</div>`;
+    return;
+  }
+  box.innerHTML = rows
+    .map((tank) => {
+      const toneClass = tankToneClass(tank.status);
+      return `
+        <div class="map-depot-row ${toneClass}">
+          <div class="map-depot-main">
+            <strong>${tank.label || tank.id}</strong>
+            <span class="pill tiny ${tank.status || "ok"}">${tankStatusLabel(tank.status)}</span>
+          </div>
+          <div class="map-depot-meta">
+            <span>${Math.round(tank.percentage || 0)}%</span>
+            <span>${formatLiters(tank.current_l)} / ${formatLiters(tank.capacity_l)}</span>
+            <span>${formatEtaDateTime(tank.last_reading)}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 
 
 function renderMap(state, targetId = "map") {
@@ -2174,46 +2401,91 @@ function renderMap(state, targetId = "map") {
   if (!container) return;
 
   if (!mapInstances[targetId]) {
-    mapInstances[targetId] = initMap(targetId, state.warehouse);
+    const seedCenter = (state.centers || []).find((c) => c.location?.lat && c.location?.lon);
+    mapInstances[targetId] = initMap(targetId, seedCenter?.location || state.warehouse);
     tankMarkerSets[targetId] = {};
     truckMarkerSets[targetId] = {};
   }
   const mapObj = mapInstances[targetId];
-  const tankMarkers = tankMarkerSets[targetId];
+  const centerMarkers = tankMarkerSets[targetId];
   const truckMarkers = truckMarkerSets[targetId];
 
-  const allTanks = state.centers.flatMap((c) => c.tanks.map((t) => ({ ...t, center: c.name })));
-  allTanks.forEach((t) => {
-    const icon = L.divIcon({
-      html: dropletIcon(statusColor[t.status]),
-      className: "",
-      iconSize: [28, 34],
-      iconAnchor: [14, 17],
-    });
-    const coords = [t.location.lat, t.location.lon];
-    if (!tankMarkers[t.id]) {
-      tankMarkers[t.id] = L.marker(coords, { icon }).addTo(mapObj);
-    } else {
-      tankMarkers[t.id].setLatLng(coords);
-      tankMarkers[t.id].setIcon(icon);
+  const centersToRender = (state.centers || []).filter(
+    (center) =>
+      isCenterEnabledOnMap(center.name) &&
+      Number.isFinite(center?.location?.lat) &&
+      Number.isFinite(center?.location?.lon)
+  );
+  const visibleCenterKeys = new Set(centersToRender.map((c) => `center-${c.id}`));
+
+  Object.keys(centerMarkers).forEach((key) => {
+    if (!visibleCenterKeys.has(key)) {
+      mapObj.removeLayer(centerMarkers[key]);
+      delete centerMarkers[key];
     }
+  });
+
+  centersToRender.forEach((center) => {
+    const key = `center-${center.id}`;
+    const worst = worstStatus(center.tanks || []);
+    const icon = L.divIcon({
+      html: dropletIcon(statusColor[worst] || statusColor.ok),
+      className: "",
+      iconSize: [30, 36],
+      iconAnchor: [15, 18],
+    });
+    const coords = [center.location.lat, center.location.lon];
+    if (!centerMarkers[key]) {
+      centerMarkers[key] = L.marker(coords, { icon }).addTo(mapObj);
+    } else {
+      centerMarkers[key].setLatLng(coords);
+      centerMarkers[key].setIcon(icon);
+    }
+
+    const alertCount = (center.tanks || []).filter((t) => ["warn", "alert", "critical"].includes(t.status)).length;
     const tooltipHtml = `
       <div class="map-popup">
-        <strong>${t.center} / ${t.label}</strong>
-        <div>${t.percentage}% - ${formatLiters(t.current_l)}</div>
-        <div>${t.product}</div>
-        <div>pH ${t.sensors.ph} - CE ${t.sensors.ec} mS/cm</div>
+        <strong>${center.name}</strong>
+        <div>ID centro: ${center.id}</div>
+        <div>Lat ${Number(center.location.lat).toFixed(6)} - Lon ${Number(center.location.lon).toFixed(6)}</div>
+        <div>Depositos: ${(center.tanks || []).length} - Alertas: ${alertCount}</div>
       </div>`;
-    tankMarkers[t.id].unbindTooltip();
-    tankMarkers[t.id].bindTooltip(tooltipHtml, {
+
+    centerMarkers[key].unbindTooltip();
+    centerMarkers[key].bindTooltip(tooltipHtml, {
       direction: "top",
       offset: [0, -10],
       opacity: 0.95,
       className: "map-tooltip",
     });
+    centerMarkers[key].off("click");
+    centerMarkers[key].on("click", () => {
+      selectedMapCenterId = center.id;
+      renderMapCenterDeposits(center);
+    });
   });
 
-  state.trucks.forEach((tr) => {
+  if (centersToRender.length && !mapObj.__fitDoneOnce) {
+    const bounds = L.latLngBounds(centersToRender.map((c) => [c.location.lat, c.location.lon]));
+    mapObj.fitBounds(bounds.pad(0.25));
+    mapObj.__fitDoneOnce = true;
+  }
+
+  const selectedCenter =
+    centersToRender.find((center) => center.id === selectedMapCenterId) || centersToRender[0] || null;
+  if (selectedCenter) selectedMapCenterId = selectedCenter.id;
+  renderMapCenterDeposits(selectedCenter);
+
+  const trucks = state.trucks || [];
+  const visibleTruckIds = new Set(trucks.map((tr) => tr.id));
+  Object.keys(truckMarkers).forEach((id) => {
+    if (!visibleTruckIds.has(id)) {
+      mapObj.removeLayer(truckMarkers[id]);
+      delete truckMarkers[id];
+    }
+  });
+
+  trucks.forEach((tr) => {
     const icon = L.divIcon({
       html: truckSvg(tr),
       className: "",
@@ -2321,6 +2593,7 @@ async function initHome() {
 
 async function loadHome() {
 
+  await ensureBrowserSessionFromServer();
   const adminSession = getSession("adminSession");
   const workerSession = ensureWorkerSession();
   const hasSession = !!adminSession || !!workerSession;
@@ -2332,7 +2605,10 @@ async function loadHome() {
   toggleGate(!hasSession);
   if (adminSession) {
   }
-  if (!hasSession) return;
+  if (!hasSession) {
+    window.location.href = "/login";
+    return;
+  }
 
   ensureGlobalQRButton();
   const cached = getCachedState();
@@ -2341,7 +2617,7 @@ async function loadHome() {
       renderCenters(cached.centers || []);
       renderSensorSummary(cached.centers || []);
       renderSensorPanel(cached.centers || []);
-      renderAlarms(cached.alerts || []);
+      renderAlarms(cached.alerts || [], "alarms-panel", cached);
       renderActiveRoutes(cached.routes || [], cached.centers || []);
       renderLog(cached.delivery_log || []);
       renderMap(cached, "map-admin");
@@ -2358,7 +2634,7 @@ async function loadHome() {
     renderCenters(state.centers);
     renderSensorSummary(state.centers);
     renderSensorPanel(state.centers);
-    renderAlarms(state.alerts);
+    renderAlarms(state.alerts, "alarms-panel", state);
     renderActiveRoutes(state.routes, state.centers);
     renderLog(state.delivery_log);
     renderMap(state, "map-admin");
@@ -2379,7 +2655,7 @@ function ensureWorkerSession() {
 function requireWorkerSession(redirectTo = "/trabajador") {
   const session = ensureWorkerSession();
   if (!session) {
-    window.location.href = "/";
+    window.location.href = redirectTo;
     return null;
   }
   return session;
@@ -2574,6 +2850,7 @@ function renderMiniCenters(centers) {
 
 async function initCenterPage() {
 
+  await ensureBrowserSessionFromServer();
   refreshSessionBadges();
 
   const centerId = document.body.dataset.centerId;
@@ -2604,9 +2881,7 @@ async function initCenterPage() {
 
     renderCenterDetail(center, { targetId: "center-tanks", titleId: "center-title", statusId: "center-status" });
 
-    renderSingleCenterMatrix(center);
-
-    renderCenterAlerts(center, state.alerts);
+    renderCenterAlerts(center, state.alerts, state);
 
     renderCenterRoutes(center, state);
 
@@ -2614,7 +2889,11 @@ async function initCenterPage() {
     const mapObj = mapInstances["map"];
     if (mapObj) mapObj.setView([center.location.lat, center.location.lon], 12);
 
-    setSubtitle(`${center.tanks.length} depositos - pH ${center.avg_ph} - CE ${center.avg_ec}`);
+    setSubtitle(
+      `${center.tanks.length} depositos - Lat ${Number(center.location.lat).toFixed(6)} - Lon ${Number(
+        center.location.lon
+      ).toFixed(6)}`
+    );
 
   };
 
@@ -2632,6 +2911,9 @@ async function initSalida() {
   refreshSessionBadges();
 
   if (!requireWorkerSession()) return;
+
+  const flowNotice = consumeFlowNotice();
+  if (flowNotice) flash(flowNotice);
 
   ensureGlobalQRButton();
   const state = await fetchState();
@@ -2703,6 +2985,11 @@ async function initSalida() {
   if (pendingScan?.type === "truck") {
     await claimRoute(pendingScan.id || pendingScan.truck_id);
     return;
+  }
+  if (pendingScan?.type === "center") {
+    flash("Primero debes escanear el QR del camion asignado.");
+  } else if (pendingScan?.type === "warehouse") {
+    flash("Primero debes activar una ruta escaneando el camion.");
   }
 
   const already = (state.routes || []).find(
@@ -2959,6 +3246,9 @@ async function initDestino() {
 
   if (!requireWorkerSession()) return;
 
+  const flowNotice = consumeFlowNotice();
+  if (flowNotice) flash(flowNotice);
+
   ensureGlobalQRButton();
   let pendingScan = consumePendingScan();
 
@@ -2978,7 +3268,9 @@ async function initDestino() {
 
     if (!route && session) {
 
-      route = state.routes.find((r) => r.worker === session.user);
+      route = state.routes.find(
+        (r) => r.worker === session.user && r.status && r.status !== "planificada" && r.status !== "finalizada"
+      );
 
     }
 
@@ -2988,7 +3280,22 @@ async function initDestino() {
 
     container.innerHTML = buildRouteView(route, state.centers);
 
-    if (!route) return;
+    if (!route) {
+      if (pendingScan?.type === "center") {
+        pendingScan = null;
+        flash("Debes activar primero la ruta escaneando el camion.");
+        window.location.href = "/salida";
+      }
+      return;
+    }
+    if (route.status === "planificada") {
+      if (pendingScan?.type === "center") {
+        pendingScan = null;
+      }
+      flash("Ruta aun no activada. Escanea primero el QR del camion.");
+      window.location.href = "/salida";
+      return;
+    }
 
     const form = document.getElementById("complete-stop-form");
 
@@ -3148,45 +3455,56 @@ async function initScan() {
         tank_id: params.get("tank_id"),
       };
 
-  try {
-    localStorage.setItem("pendingScan", JSON.stringify(payload));
-  } catch (_e) {
-    /* ignore */
+  if (!payload?.type) {
+    if (status) status.textContent = "QR no reconocido.";
+    setTimeout(() => (window.location.href = "/"), 600);
+    return;
   }
 
   const workerSession = getSession("workerSession");
-  const routeId = getSession("activeRouteId");
-
-  // Procesar directamente si ya hay ruta activa del operario
-  if (workerSession && routeId && payload.type === "center") {
-    try {
-      const res = await postJSON("/api/routes/arrive", { route_id: routeId });
-      if (!res.ok) {
-        console.warn("No se marco llegada en /scan:", res);
-      }
-    } catch (_e) {
-      /* ignore */
-    }
-  } else if (workerSession && routeId && payload.type === "warehouse") {
-    try {
-      const res = await postJSON("/api/routes/arrive-warehouse", { route_id: routeId, success: true });
-      if (!res.ok) {
-        console.warn("No se cerro ruta en /scan:", res);
-      }
-    } catch (_e) {
-      /* ignore */
-    }
+  if (!workerSession) {
+    savePendingScan(payload);
+    if (status) status.textContent = "QR capturado. Inicia sesion de operario para continuar.";
+    setTimeout(() => (window.location.href = "/trabajador"), 300);
+    return;
   }
 
-  if (status) status.textContent = "QR capturado. Redirigiendo al paso adecuado...";
+  const routeId = getSession("activeRouteId");
+  if (payload.type === "truck") {
+    savePendingScan(payload);
+    if (status) status.textContent = "QR de camion capturado. Redirigiendo a salida...";
+    setTimeout(() => (window.location.href = "/salida"), 220);
+    return;
+  }
 
-  let dest = "/";
+  if (payload.type === "center") {
+    if (!routeId) {
+      saveFlowNotice("Orden incorrecto: primero QR de camion, despues QR de parada.");
+      if (status) status.textContent = "Debes escanear primero el camion asignado.";
+      setTimeout(() => (window.location.href = "/salida"), 320);
+      return;
+    }
+    savePendingScan(payload);
+    if (status) status.textContent = "QR de parada capturado. Redirigiendo a destino...";
+    setTimeout(() => (window.location.href = "/destino"), 220);
+    return;
+  }
 
-  if (payload.type === "truck") dest = "/salida";
-  else if (payload.type === "center") dest = "/destino";
-  else if (payload.type === "warehouse") dest = "/llegada";
+  if (payload.type === "warehouse") {
+    if (!routeId) {
+      saveFlowNotice("No hay ruta activa. Escanea primero el camion.");
+      if (status) status.textContent = "No hay ruta activa para cerrar.";
+      setTimeout(() => (window.location.href = "/salida"), 320);
+      return;
+    }
+    savePendingScan(payload);
+    if (status) status.textContent = "QR de almacen capturado. Redirigiendo a llegada...";
+    setTimeout(() => (window.location.href = "/llegada"), 220);
+    return;
+  }
 
-  setTimeout(() => (window.location.href = dest), 200);
+  if (status) status.textContent = "Tipo de QR no soportado.";
+  setTimeout(() => (window.location.href = "/"), 600);
 }
 
 
@@ -3195,6 +3513,9 @@ async function initLlegada() {
   refreshSessionBadges();
 
   if (!requireWorkerSession()) return;
+
+  const flowNotice = consumeFlowNotice();
+  if (flowNotice) flash(flowNotice);
 
   ensureGlobalQRButton();
   const container = document.getElementById("arrival-content");
@@ -3218,7 +3539,10 @@ async function initLlegada() {
 
     let route = state.routes.find((r) => r.id === routeId);
 
-    if (!route && session) route = state.routes.find((r) => r.worker === session.user);
+    if (!route && session)
+      route = state.routes.find(
+        (r) => r.worker === session.user && r.status && r.status !== "planificada" && r.status !== "finalizada"
+      );
 
     container.innerHTML = buildArrivalView(route);
 
@@ -3324,32 +3648,31 @@ async function initLlegada() {
 
 async function initWorkerLogin() {
 
+  const flowNotice = consumeFlowNotice();
+  if (flowNotice) flash(flowNotice);
+
   const existing = ensureWorkerSession();
   if (existing) {
     // Si ya tiene sesion, reencaminar segun un QR pendiente
     const pending = consumePendingScan();
     if (pending?.type === "center") {
-      try {
-        localStorage.setItem("pendingScan", JSON.stringify(pending));
-      } catch (_e) {
-        /* ignore */
+      if (getSession("activeRouteId")) {
+        savePendingScan(pending);
+        window.location.href = "/destino";
+      } else {
+        saveFlowNotice("Primero escanea el QR del camion para activar la ruta.");
+        window.location.href = "/salida";
       }
-      window.location.href = "/destino";
     } else if (pending?.type === "warehouse") {
-      try {
-        localStorage.setItem("pendingScan", JSON.stringify(pending));
-      } catch (_e) {
-        /* ignore */
+      if (getSession("activeRouteId")) {
+        savePendingScan(pending);
+        window.location.href = "/llegada";
+      } else {
+        saveFlowNotice("Primero escanea el QR del camion para activar la ruta.");
+        window.location.href = "/salida";
       }
-      window.location.href = "/llegada";
     } else {
-      if (pending) {
-        try {
-          localStorage.setItem("pendingScan", JSON.stringify(pending));
-        } catch (_e) {
-          /* ignore */
-        }
-      }
+      if (pending) savePendingScan(pending);
       window.location.href = "/salida";
     }
     return;
@@ -3380,27 +3703,37 @@ async function initWorkerLogin() {
     flash("Sesion iniciada");
 
     const pending = consumePendingScan();
-    if (pending) {
-      try {
-        localStorage.setItem("pendingScan", JSON.stringify(pending));
-      } catch (_e) {
-        /* ignore */
-      }
-    }
+    if (pending) savePendingScan(pending);
 
     // Tras login, si hay una ruta activa del operario, guardarla en sesion
     try {
       const state = await fetchState();
-      const active = (state.routes || []).find((r) => r.worker === body.username && r.status !== "finalizada");
+      const active = (state.routes || []).find(
+        (r) =>
+          r.worker === body.username &&
+          r.status &&
+          r.status !== "finalizada" &&
+          r.status !== "planificada"
+      );
       if (active) saveSession("activeRouteId", active.id);
     } catch (_e) {
       /* ignore */
     }
 
     if (pending?.type === "center") {
-      window.location.href = "/destino";
+      if (getSession("activeRouteId")) {
+        window.location.href = "/destino";
+      } else {
+        saveFlowNotice("Primero escanea el QR del camion para activar la ruta.");
+        window.location.href = "/salida";
+      }
     } else if (pending?.type === "warehouse") {
-      window.location.href = "/llegada";
+      if (getSession("activeRouteId")) {
+        window.location.href = "/llegada";
+      } else {
+        saveFlowNotice("Primero escanea el QR del camion para activar la ruta.");
+        window.location.href = "/salida";
+      }
     } else if (pending?.type === "truck") {
       window.location.href = "/salida";
     } else {
@@ -3535,8 +3868,8 @@ function openRouteDetail(route, state) {
               <strong>${idx + 1}. ${centerName}</strong>
               <span class="chip soft">${tankLabel}</span>
             </div>
-            <div class="small muted">${compactProduct(s.product || product || "-")} · ${formatLiters(liters)}</div>
-            <div class="small muted">${arrivalText}${departText ? " · " + departText : ""}</div>
+            <div class="small muted">${compactProduct(s.product || product || "-")} - ${formatLiters(liters)}</div>
+            <div class="small muted">${arrivalText}${departText ? " - " + departText : ""}</div>
             <div class="row" style="flex-wrap:wrap;">
               <span class="small">${duration ? `${duration} min en destino` : "Tiempo pendiente"}</span>
               <span class="status ${stopTone || "warn"}">${stopStatus}</span>
@@ -3546,7 +3879,7 @@ function openRouteDetail(route, state) {
       })
       .join("") || `<div class="muted">Sin paradas</div>`;
 
-  title.textContent = `${route.id} · ${route.truck_id}${route.worker ? " · " + route.worker : ""}`;
+  title.textContent = `${route.id} - ${route.truck_id}${route.worker ? " - " + route.worker : ""}`;
   body.innerHTML = `
     <div class="row" style="flex-wrap:wrap; gap:6px;">
       <span class="chip soft"><span class="status ${statusTone}">${routeStatusLabel[route.status] || route.status}</span></span>
@@ -3568,6 +3901,7 @@ function openRouteDetail(route, state) {
 
 
 async function initAdmin() {
+  await ensureBrowserSessionFromServer();
 
   const loginPanel = document.getElementById("admin-login-panel");
 
@@ -3576,6 +3910,10 @@ async function initAdmin() {
   const sessionLabel = document.getElementById("admin-session-label");
 
   const adminSession = getSession("adminSession");
+  if (!adminSession) {
+    window.location.href = "/login";
+    return;
+  }
 
   let adminState = null;
   const routeFilters = { status: "all", worker: "all", truck: "all", center: "all", type: "all" };
@@ -3594,13 +3932,13 @@ async function initAdmin() {
     const summarizeRoutes = (routes) =>
       routes
         .slice(0, 4)
-        .map((r) => `${r.id} · ${routeStatusLabel[r.status] || r.status}`)
+        .map((r) => `${r.id} - ${routeStatusLabel[r.status] || r.status}`)
         .join("<br>");
 
     const summarizeClosed = (routes) =>
       routes
         .slice(0, 4)
-        .map((r) => `${r.id} · ${formatDatePlus1(r.finished_at || r.started_at)}`)
+        .map((r) => `${r.id} - ${formatDatePlus1(r.finished_at || r.started_at)}`)
         .join("<br>");
 
     const summarizeAlerts = (list) =>
@@ -3633,7 +3971,7 @@ async function initAdmin() {
 
     renderCenters(state.centers, "admin-center-grid", { skipFocus: true });
 
-    renderAlarms(state.alerts, "admin-alerts");
+    renderAlarms(state.alerts, "admin-alerts", state);
 
   };
 
@@ -3798,6 +4136,7 @@ async function initAdmin() {
     adminState = state;
 
     renderStats(state);
+    renderAdminCenters(state);
 
     renderUrgentWall(state);
 
@@ -4141,6 +4480,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const page = document.body.dataset.page;
 
+  if (page === "login") initLoginPage();
+
   if (page === "home") initHome();
 
   if (page === "worker-login") initWorkerLogin();
@@ -4166,3 +4507,4 @@ document.addEventListener("DOMContentLoaded", () => {
   if (page === "scan") initScan();
 
 });
+

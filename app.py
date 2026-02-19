@@ -1,14 +1,21 @@
 ﻿import math
 import random
 import json
+import base64
+import secrets
+import threading
+import unicodedata
 from copy import deepcopy
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
+from typing import Dict, List, Optional, Tuple
 import os
 from pathlib import Path
 import qrcode
 from qrcode.image.pure import PyPNGImage
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, redirect, session, url_for
 
 try:
     import psycopg2
@@ -16,9 +23,53 @@ except Exception:
     psycopg2 = None
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "change-this-secret-in-production")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("SESSION_COOKIE_SECURE", "0") == "1"
+
+SAVIAN_API_BASE = os.environ.get(
+    "SAVIAN_API_BASE", "https://func-savian-sensor-api-dev.azurewebsites.net/api"
+).rstrip("/")
+SAVIAN_API_TIMEOUT = int(os.environ.get("SAVIAN_API_TIMEOUT", "20"))
+SAVIAN_STATE_CACHE_SECONDS = int(os.environ.get("SAVIAN_STATE_CACHE_SECONDS", "30"))
+
+ALLOWED_CENTER_NAMES = {
+    "hornillos",
+    "los hornillos",
+    "cortezones",
+    "los cortezones",
+    "eurogold",
+    "los matias",
+    "matias",
+}
+
+AUTH_SESSION_COOKIE_KEY = "sid"
+auth_session_store: Dict[str, Dict] = {}
+auth_session_lock = threading.Lock()
+external_state_cache = {"state": None, "ts": None}
+external_state_lock = threading.Lock()
 
 
 WAREHOUSE = {"lat": 36.834, "lon": -2.4637, "name": "Almacen Almeria"}
+
+TEST_TRUCKS = [
+    {
+        "id": "TR-01",
+        "driver": "Alba",
+        "capacity_l": 12000,
+    },
+    {
+        "id": "TR-02",
+        "driver": "Raul",
+        "capacity_l": 10000,
+    },
+    {
+        "id": "TR-03",
+        "driver": "Sofia",
+        "capacity_l": 14000,
+    },
+]
 
 WORKERS = {
     "prueba1": {"password": "123", "name": "Operador 1"},
@@ -29,6 +80,292 @@ WORKERS = {
 ADMIN = {"username": "admin", "password": "123"}
 
 DB_URL = os.environ.get("DATABASE_URL")
+
+
+def _strip_accents(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+
+def _normalize_center_name(value: str) -> str:
+    text = _strip_accents(value).lower()
+    return " ".join(text.split())
+
+
+def _is_allowed_center(value: str) -> bool:
+    key = _normalize_center_name(value)
+    variants = {key}
+    if key.startswith("los "):
+        variants.add(key[4:])
+    else:
+        variants.add(f"los {key}")
+    return any(item in ALLOWED_CENTER_NAMES for item in variants)
+
+
+def _to_float(value, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned == "" or cleaned.lower() == "nat":
+                return default
+            value = cleaned.replace(",", ".")
+        return float(value)
+    except Exception:
+        return default
+
+
+def _to_int(value, default: Optional[int] = None) -> Optional[int]:
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if cleaned == "" or cleaned.lower() == "nat":
+                return default
+            value = cleaned
+        return int(float(value))
+    except Exception:
+        return default
+
+
+def _safe_iso_ts(value) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() == "nat":
+        return None
+    return text
+
+
+def _json_loads(raw: bytes):
+    try:
+        text = raw.decode("utf-8")
+    except Exception:
+        text = raw.decode("latin-1", errors="ignore")
+    if not text:
+        return {}
+    try:
+        return json.loads(text)
+    except Exception:
+        return {"raw": text}
+
+
+def _http_json(
+    method: str,
+    url: str,
+    body: Optional[Dict] = None,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: int = SAVIAN_API_TIMEOUT,
+) -> Tuple[int, Dict]:
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    req = urllib_request.Request(url=url, data=payload, headers=request_headers, method=method.upper())
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as response:
+            status = response.getcode()
+            raw = response.read()
+            return status, _json_loads(raw)
+    except urllib_error.HTTPError as exc:
+        raw = exc.read()
+        return exc.code, _json_loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        return 503, {"message": f"Error de conexion: {exc}"}
+
+
+def _response_payload(data: Dict):
+    if isinstance(data, dict) and "payload" in data:
+        return data.get("payload")
+    return data
+
+
+def _response_message(data: Dict, fallback: str) -> str:
+    if isinstance(data, dict):
+        msg = data.get("message") or data.get("error")
+        if isinstance(msg, str) and msg.strip():
+            return msg
+    return fallback
+
+
+def _session_id(create: bool = False) -> Optional[str]:
+    sid = session.get(AUTH_SESSION_COOKIE_KEY)
+    if sid:
+        return sid
+    if not create:
+        return None
+    sid = secrets.token_urlsafe(32)
+    session[AUTH_SESSION_COOKIE_KEY] = sid
+    return sid
+
+
+def _decode_jwt_payload(token: Optional[str]) -> Dict:
+    if not token or "." not in token:
+        return {}
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    payload_part = parts[1]
+    padding = "=" * (-len(payload_part) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode((payload_part + padding).encode("utf-8"))
+        parsed = json.loads(decoded.decode("utf-8"))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _get_auth_session() -> Optional[Dict]:
+    sid = _session_id(create=False)
+    if not sid:
+        return None
+    with auth_session_lock:
+        data = auth_session_store.get(sid)
+        if not data:
+            return None
+        return deepcopy(data)
+
+
+def _set_auth_session(username: str, token_payload: Dict):
+    sid = _session_id(create=True)
+    expires_in = _to_int(token_payload.get("expiresIn"), 900) or 900
+    expires_at = datetime.utcnow() + timedelta(seconds=max(expires_in - 30, 30))
+    claims = _decode_jwt_payload(token_payload.get("accessToken"))
+    auth_data = {
+        "username": username,
+        "access_token": token_payload.get("accessToken"),
+        "refresh_token": token_payload.get("refreshToken"),
+        "token_type": token_payload.get("tokenType", "Bearer"),
+        "expires_in": expires_in,
+        "expires_at": expires_at,
+        "tipo_usuario": token_payload.get("tipo_usuario") or claims.get("tipo_usuario"),
+        "claims": claims,
+    }
+    with auth_session_lock:
+        auth_session_store[sid] = auth_data
+
+
+def _clear_auth_session():
+    sid = _session_id(create=False)
+    if sid:
+        with auth_session_lock:
+            auth_session_store.pop(sid, None)
+    session.pop(AUTH_SESSION_COOKIE_KEY, None)
+
+
+def _token_expiring(auth_data: Dict) -> bool:
+    expires_at = auth_data.get("expires_at")
+    if not isinstance(expires_at, datetime):
+        return True
+    return expires_at <= (datetime.utcnow() + timedelta(seconds=20))
+
+
+def _login_remote(username: str, password: str) -> Tuple[bool, Dict, str]:
+    url = f"{SAVIAN_API_BASE}/IniciarSesion"
+    status, data = _http_json("POST", url, body={"username": username, "password": password})
+    payload = _response_payload(data)
+    if (
+        status == 200
+        and isinstance(payload, dict)
+        and payload.get("accessToken")
+        and payload.get("refreshToken")
+    ):
+        return True, payload, _response_message(data, "Autenticacion correcta")
+    return False, {}, _response_message(data, f"No se pudo iniciar sesion ({status})")
+
+
+def _refresh_remote_token(refresh_token: str) -> Tuple[bool, Dict, str]:
+    refresh_paths = ["/RefreshToke", "/RefreshToken"]
+    last_msg = "No se pudo renovar el token"
+    for path in refresh_paths:
+        url = f"{SAVIAN_API_BASE}{path}"
+        status, data = _http_json("POST", url, body={"refreshToken": refresh_token})
+        payload = _response_payload(data)
+        if (
+            status == 200
+            and isinstance(payload, dict)
+            and payload.get("accessToken")
+            and payload.get("refreshToken")
+        ):
+            return True, payload, _response_message(data, "Token renovado")
+        if status != 404:
+            last_msg = _response_message(data, f"No se pudo renovar el token ({status})")
+    return False, {}, last_msg
+
+
+def _ensure_auth_session(refresh_if_needed: bool = True) -> Optional[Dict]:
+    auth_data = _get_auth_session()
+    if not auth_data:
+        return None
+    if not _token_expiring(auth_data):
+        return auth_data
+    if not refresh_if_needed:
+        return None
+    refresh_token = auth_data.get("refresh_token")
+    username = auth_data.get("username", "")
+    if not refresh_token:
+        _clear_auth_session()
+        return None
+    ok, payload, _msg = _refresh_remote_token(refresh_token)
+    if not ok:
+        _clear_auth_session()
+        return None
+    _set_auth_session(username, payload)
+    return _get_auth_session()
+
+
+def _call_savian_api(
+    method: str,
+    endpoint: str,
+    params: Optional[Dict] = None,
+    body: Optional[Dict] = None,
+    retry_on_401: bool = True,
+) -> Tuple[int, Dict]:
+    auth_data = _ensure_auth_session(refresh_if_needed=True)
+    if not auth_data:
+        return 401, {"message": "Sesion no autenticada"}
+
+    base_url = f"{SAVIAN_API_BASE}/{endpoint.lstrip('/')}"
+    if params:
+        query = urllib_parse.urlencode({k: v for k, v in params.items() if v is not None})
+        url = f"{base_url}?{query}" if query else base_url
+    else:
+        url = base_url
+
+    token = auth_data.get("access_token")
+    token_type = auth_data.get("token_type") or "Bearer"
+    headers = {"Authorization": f"{token_type} {token}"}
+    status, data = _http_json(method, url, body=body, headers=headers)
+
+    if status == 401 and retry_on_401:
+        refresh_token = auth_data.get("refresh_token")
+        username = auth_data.get("username", "")
+        if not refresh_token:
+            _clear_auth_session()
+            return status, data
+        ok, payload, _msg = _refresh_remote_token(refresh_token)
+        if not ok:
+            _clear_auth_session()
+            return 401, {"message": "Sesion expirada. Inicia sesion de nuevo."}
+        _set_auth_session(username, payload)
+        renewed = _get_auth_session() or {}
+        token = renewed.get("access_token")
+        token_type = renewed.get("token_type") or "Bearer"
+        headers = {"Authorization": f"{token_type} {token}"}
+        status, data = _http_json(method, url, body=body, headers=headers)
+
+    if status == 401:
+        _clear_auth_session()
+    return status, data
+
+
+def _is_request_authenticated() -> bool:
+    return _ensure_auth_session(refresh_if_needed=True) is not None
 
 
 def _make_tank(prefix: str, idx: int, base_lat: float, base_lon: float, product: str):
@@ -358,6 +695,9 @@ def _load_state_from_db():
 
 
 def _save_state():
+    with external_state_lock:
+        external_state_cache["state"] = None
+        external_state_cache["ts"] = None
     if not _db_enabled():
         return
     try:
@@ -540,29 +880,35 @@ def _flatten_tanks():
 
 
 def _compute_tank_status(tank):
-    pct = tank["current_l"] / tank["capacity_l"] if tank["capacity_l"] else 0
-    urgent_threshold = 0.2
+    capacity_l = _to_float(tank.get("capacity_l"), 0.0) or 0.0
+    current_l = _to_float(tank.get("current_l"), 0.0) or 0.0
+    warn_at = _to_float(tank.get("warn_at"), 0.30) or 0.30
+    crit_at = _to_float(tank.get("crit_at"), 0.15) or 0.15
+    pct = current_l / capacity_l if capacity_l else 0
+    urgent_threshold = min(max(crit_at, 0.0), 1.0)
     status = "ok"
     hours_left = None
     runout_eta = None
 
     if pct <= urgent_threshold:
-        status = "alert"
+        status = "critical"
         hours_left = 48
         runout_eta = _now() + timedelta(hours=hours_left)
-    elif pct <= tank["warn_at"]:
+    elif pct <= warn_at:
         status = "warn"
 
     if hours_left is None:
-        hourly_use = tank["capacity_l"] * 0.018
-        hours_left = (tank["current_l"] / hourly_use) if hourly_use else None
+        hourly_use = capacity_l * 0.018
+        hours_left = (current_l / hourly_use) if hourly_use else None
         runout_eta = (_now() + timedelta(hours=hours_left)) if hours_left else None
 
     return pct, status, runout_eta, hours_left
 
 
 def _tank_deficit(tank: Dict) -> int:
-    return max(tank.get("capacity_l", 0) - tank.get("current_l", 0), 0)
+    capacity_l = _to_float(tank.get("capacity_l"), 0.0) or 0.0
+    current_l = _to_float(tank.get("current_l"), 0.0) or 0.0
+    return int(max(capacity_l - current_l, 0))
 
 
 def _reserved_tank_pairs():
@@ -985,6 +1331,482 @@ def _serialize_state():
     }
 
 
+def _extract_centers_rows(data: Dict) -> List[Dict]:
+    payload = _response_payload(data)
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("centrosTrabajo", "CentrosTrabajo", "centros", "Centros", "items", "data"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return rows
+    return []
+
+
+def _center_location(center_row: Dict) -> Dict:
+    lat = _to_float(
+        center_row.get("Lat")
+        or center_row.get("lat")
+        or center_row.get("Latitude")
+        or center_row.get("latitude"),
+        WAREHOUSE["lat"],
+    )
+    lon = _to_float(
+        center_row.get("Long")
+        or center_row.get("long")
+        or center_row.get("Lon")
+        or center_row.get("lon")
+        or center_row.get("Longitude")
+        or center_row.get("longitude"),
+        WAREHOUSE["lon"],
+    )
+    return {"lat": lat, "lon": lon}
+
+
+def _compute_external_tank_status(
+    liters: Optional[float],
+    capacity_l: float,
+    orange_level: Optional[float],
+    red_level: Optional[float],
+) -> str:
+    if liters is None:
+        return "warn"
+    if red_level is not None and liters <= red_level:
+        return "critical"
+    if orange_level is not None and liters <= orange_level:
+        return "alert"
+    if not capacity_l:
+        return "warn"
+    pct = liters / capacity_l
+    if pct <= 0.15:
+        return "critical"
+    if pct <= 0.30:
+        return "warn"
+    return "ok"
+
+
+def _fetch_center_deposit_screens(center_row: Dict) -> List[Dict]:
+    center_id = _to_int(center_row.get("IdCentroTrabajo") or center_row.get("idCentroTrabajo"))
+    if center_id is None:
+        return []
+
+    screens: List[Dict] = []
+    deposits_meta = center_row.get("Depositos") or center_row.get("depositos") or []
+    if isinstance(deposits_meta, list) and deposits_meta:
+        for item in deposits_meta:
+            screen_id = _to_int(
+                item.get("IdDepositosPantalla")
+                or item.get("idDepositosPantalla")
+                or item.get("id")
+            )
+            params = {"idCentroTrabajo": center_id, "idDepositosPantalla": screen_id}
+            status, data = _call_savian_api("GET", "ObtenerPantallaDepositos", params=params)
+            payload = _response_payload(data)
+            if status == 200 and isinstance(payload, dict):
+                screens.append(payload)
+    else:
+        status, data = _call_savian_api(
+            "GET",
+            "ObtenerPantallaDepositos",
+            params={"idCentroTrabajo": center_id},
+        )
+        payload = _response_payload(data)
+        if status == 200 and isinstance(payload, dict):
+            screens.append(payload)
+    return screens
+
+
+def _default_tank_sensors():
+    return {
+        "ph": 0,
+        "ec": 0,
+        "drain_ph": 0,
+        "drain_ec": 0,
+        "climate": {"temp_c": 0, "humidity_pct": 0, "vpd": 0},
+        "fertilizer": {"mix_l": 0, "pressure_bar": 0},
+        "drain_pct": 0,
+    }
+
+
+def _sync_internal_runtime_from_external(serialized_centers: List[Dict]):
+    synced_centers: List[Dict] = []
+    for center in serialized_centers:
+        center_entry = {
+            "id": str(center.get("id")),
+            "name": center.get("name") or str(center.get("id")),
+            "location": {
+                "lat": _to_float(center.get("location", {}).get("lat"), WAREHOUSE["lat"]),
+                "lon": _to_float(center.get("location", {}).get("lon"), WAREHOUSE["lon"]),
+            },
+            "tanks": [],
+        }
+        for tank in center.get("tanks", []):
+            capacity_l = _to_float(tank.get("capacity_l"), 0.0) or 0.0
+            current_l = _to_float(tank.get("current_l"), 0.0)
+            current_l = 0.0 if current_l is None else current_l
+            if capacity_l > 0:
+                current_l = max(0.0, min(current_l, capacity_l))
+            center_entry["tanks"].append(
+                {
+                    "id": str(tank.get("id")),
+                    "label": tank.get("label") or str(tank.get("id")),
+                    "product": tank.get("product") or "-",
+                    "capacity_l": capacity_l,
+                    "current_l": current_l,
+                    "warn_at": _to_float(tank.get("warn_at"), 0.30) or 0.30,
+                    "crit_at": _to_float(tank.get("crit_at"), 0.15) or 0.15,
+                    "location": {
+                        "lat": _to_float(tank.get("location", {}).get("lat"), center_entry["location"]["lat"]),
+                        "lon": _to_float(tank.get("location", {}).get("lon"), center_entry["location"]["lon"]),
+                        "name": center_entry["name"],
+                    },
+                    "sensors": _default_tank_sensors(),
+                }
+            )
+        synced_centers.append(center_entry)
+
+    if synced_centers:
+        centers.clear()
+        centers.extend(synced_centers)
+
+
+def _ensure_test_trucks():
+    current = {str(tr.get("id")): tr for tr in trucks}
+    synced = []
+    for base in TEST_TRUCKS:
+        existing = current.get(base["id"], {})
+        synced.append(
+            {
+                "id": base["id"],
+                "driver": existing.get("driver") or base["driver"],
+                "status": existing.get("status") or "parked",
+                "current_load_l": _to_int(existing.get("current_load_l"), 0) or 0,
+                "capacity_l": _to_int(existing.get("capacity_l"), base["capacity_l"]) or base["capacity_l"],
+                "position": existing.get("position") or deepcopy(WAREHOUSE),
+                "destination": existing.get("destination"),
+                "started_at": existing.get("started_at"),
+                "eta_minutes": existing.get("eta_minutes"),
+                "route_id": existing.get("route_id"),
+                "notes": existing.get("notes") or "Disponible en almacen",
+            }
+        )
+    trucks.clear()
+    trucks.extend(synced)
+
+
+def _serialize_runtime_trucks() -> List[Dict]:
+    serialized = []
+    for tr in trucks:
+        serialized.append(
+            {
+                "id": tr.get("id"),
+                "driver": tr.get("driver"),
+                "status": tr.get("status") or "parked",
+                "current_load_l": _to_int(tr.get("current_load_l"), 0) or 0,
+                "capacity_l": _to_int(tr.get("capacity_l"), 0) or 0,
+                "position": tr.get("position") or deepcopy(WAREHOUSE),
+                "destination": tr.get("destination"),
+                "eta_minutes": tr.get("eta_minutes"),
+                "notes": tr.get("notes") or "",
+                "route_id": tr.get("route_id"),
+            }
+        )
+    return serialized
+
+
+def _serialize_runtime_log(limit: int = 40) -> List[Dict]:
+    rows = []
+    for item in sorted(delivery_log, key=lambda x: x.get("ts") or _now(), reverse=True)[:limit]:
+        ts = item.get("ts")
+        ts_iso = ts.isoformat() if isinstance(ts, datetime) else str(ts or "")
+        rows.append(
+            {
+                "ts": ts_iso,
+                "truck_id": item.get("truck_id"),
+                "tank_id": item.get("tank_id"),
+                "center": item.get("center"),
+                "delivered_l": item.get("delivered_l"),
+                "by": item.get("by"),
+                "note": item.get("note"),
+            }
+        )
+    return rows
+
+
+def _ensure_external_runtime_ready():
+    try:
+        _get_external_state_cached(force=False)
+    except Exception:
+        return
+
+
+def _build_external_state() -> Dict:
+    status, centers_response = _call_savian_api("GET", "ObtenerInformacionCentrosTrabajo")
+    if status == 401:
+        message = _response_message(centers_response, "Sesion expirada. Inicia sesion de nuevo.")
+        raise PermissionError(message)
+    if status != 200:
+        message = _response_message(
+            centers_response,
+            f"No se pudo obtener la informacion de centros ({status})",
+        )
+        raise RuntimeError(message)
+
+    center_rows = _extract_centers_rows(centers_response)
+    selected_rows = [row for row in center_rows if _is_allowed_center(row.get("Nombre", ""))]
+    selected_rows.sort(key=lambda item: str(item.get("Nombre", "")))
+
+    serialized_centers: List[Dict] = []
+    flat_tanks: List[Dict] = []
+    alerts: List[Dict] = []
+    urgent_centers: List[Dict] = []
+
+    for center_row in selected_rows:
+        center_id = _to_int(center_row.get("IdCentroTrabajo") or center_row.get("idCentroTrabajo"))
+        center_id_str = str(center_id) if center_id is not None else str(center_row.get("Nombre", ""))
+        center_name = center_row.get("Nombre") or center_row.get("nombre") or center_id_str
+        location = _center_location(center_row)
+        center_tanks: List[Dict] = []
+        urgent_tanks: List[Dict] = []
+        screen_meta: List[Dict] = []
+        seen_elements = set()
+        tank_index = 0
+
+        for screen in _fetch_center_deposit_screens(center_row):
+            screen_id = _to_int(
+                screen.get("IdDepositosPantalla")
+                or screen.get("idDepositosPantalla")
+                or screen.get("id")
+            )
+            screen_name = screen.get("NombrePantalla") or screen.get("nombrePantalla") or ""
+            screen_meta.append(
+                {
+                    "id_depositos_pantalla": screen_id,
+                    "nombre_pantalla": screen_name,
+                    "balsa": screen.get("balsa"),
+                }
+            )
+            deposits = screen.get("depositos") or screen.get("Depositos") or []
+            if not isinstance(deposits, list):
+                continue
+            for dep in deposits:
+                element_id = _to_int(
+                    dep.get("IdDepositosPantallaElemento")
+                    or dep.get("idDepositosPantallaElemento")
+                    or dep.get("id")
+                )
+                dedupe_key = (screen_id, element_id)
+                if dedupe_key in seen_elements:
+                    continue
+                seen_elements.add(dedupe_key)
+
+                name = dep.get("NombreDeposito") or dep.get("nombreDeposito") or f"Deposito {tank_index + 1}"
+                description = dep.get("DescripcionDeposito") or dep.get("descripcionDeposito") or ""
+                last_reading = _safe_iso_ts(
+                    dep.get("FechaHoraUltimaLectura") or dep.get("fechaHoraUltimaLectura")
+                )
+                capacity_l = _to_float(dep.get("CapacidadLitros") or dep.get("capacidadLitros"), 0.0) or 0.0
+                liters = _to_float(dep.get("Litros") or dep.get("litros"))
+                orange_level = _to_float(
+                    dep.get("NivelAlertaNaranja") or dep.get("nivelAlertaNaranja")
+                )
+                red_level = _to_float(dep.get("NivelAlertaRoja") or dep.get("nivelAlertaRoja"))
+                status_name = _compute_external_tank_status(liters, capacity_l, orange_level, red_level)
+
+                percentage = 0.0
+                if liters is not None and capacity_l > 0:
+                    percentage = round((liters / capacity_l) * 100, 1)
+
+                deficit_l = 0.0
+                if liters is not None and capacity_l > 0:
+                    deficit_l = round(max(capacity_l - liters, 0.0), 1)
+                elif liters is None and capacity_l > 0:
+                    deficit_l = round(capacity_l, 1)
+
+                tank_id = str(element_id) if element_id is not None else f"{center_id_str}-dep-{tank_index + 1}"
+                point_offset = ((tank_index % 4) - 1.5) * 0.00018
+                tank_location = {
+                    "lat": location["lat"] + point_offset,
+                    "lon": location["lon"] + point_offset,
+                    "name": center_name,
+                }
+                tank_index += 1
+
+                warn_at = (orange_level / capacity_l) if orange_level is not None and capacity_l > 0 else 0.30
+                crit_at = (red_level / capacity_l) if red_level is not None and capacity_l > 0 else 0.15
+                tank_entry = {
+                    "id": tank_id,
+                    "label": name,
+                    "product": description or "-",
+                    "capacity_l": capacity_l,
+                    "current_l": liters,
+                    "warn_at": warn_at,
+                    "crit_at": crit_at,
+                    "percentage": percentage,
+                    "status": status_name,
+                    "runout_eta": None,
+                    "runout_hours": None,
+                    "deficit_l": deficit_l,
+                    "needs_refill": status_name in ("warn", "alert", "critical"),
+                    "sensors": {},
+                    "location": tank_location,
+                    "center_id": center_id_str,
+                    "center_name": center_name,
+                    "description": description,
+                    "last_reading": last_reading,
+                    "alerts_enabled": bool(dep.get("AlertasNivelActivas") or dep.get("alertasNivelActivas")),
+                    "alert_level_orange": orange_level,
+                    "alert_level_red": red_level,
+                    "id_depositos_pantalla": screen_id,
+                    "nombre_pantalla": screen_name,
+                    "id_depositos_pantalla_elemento": element_id,
+                }
+                center_tanks.append(tank_entry)
+                flat_tanks.append(tank_entry)
+
+                if status_name in ("warn", "alert", "critical"):
+                    severity = "alta" if status_name in ("alert", "critical") else "media"
+                    liters_text = "n/d" if liters is None else f"{round(liters, 1)} L"
+                    message = (
+                        f"{center_name} / {name}: {percentage}% ({liters_text} de {round(capacity_l, 1)} L)"
+                    )
+                    if orange_level is not None or red_level is not None:
+                        message += (
+                            f" · Umbral naranja: {orange_level if orange_level is not None else 'n/d'}"
+                            f" · Umbral rojo: {red_level if red_level is not None else 'n/d'}"
+                        )
+                    alerts.append(
+                        {
+                            "tank_id": tank_id,
+                            "center": center_name,
+                            "severity": severity,
+                            "message": message,
+                            "runout_eta": None,
+                            "status": status_name,
+                        }
+                    )
+
+                if percentage <= 20 or status_name in ("alert", "critical"):
+                    urgent_tanks.append(
+                        {
+                            "id": tank_id,
+                            "label": name,
+                            "product": description or "-",
+                            "percentage": percentage,
+                            "deficit_l": deficit_l,
+                            "runout_eta": None,
+                            "hours_left": None,
+                        }
+                    )
+
+        serialized_centers.append(
+            {
+                "id": center_id_str,
+                "name": center_name,
+                "location": location,
+                "tanks": center_tanks,
+                "avg_ph": "-",
+                "avg_ec": "-",
+                "id_centro_trabajo": center_id,
+                "deposit_screens": screen_meta,
+            }
+        )
+        if urgent_tanks:
+            urgent_centers.append(
+                {
+                    "center_id": center_id_str,
+                    "center_name": center_name,
+                    "location": location,
+                    "tanks": urgent_tanks,
+                    "total_deficit": round(sum(t["deficit_l"] for t in urgent_tanks), 1),
+                    "urgent_count": len(urgent_tanks),
+                }
+            )
+
+    _sync_internal_runtime_from_external(serialized_centers)
+    _ensure_test_trucks()
+
+    return {
+        "warehouse": WAREHOUSE,
+        "centers": serialized_centers,
+        "tanks": flat_tanks,
+        "trucks": _serialize_runtime_trucks(),
+        "workers": list(WORKERS.keys()),
+        "alerts": alerts,
+        "routes": _serialize_routes(active_routes),
+        "route_history": _serialize_routes(route_history[:20]),
+        "delivery_log": _serialize_runtime_log(),
+        "server_time": _now().isoformat(),
+        "urgent_centers": urgent_centers,
+        "source": "savian-api",
+    }
+
+
+def _get_external_state_cached(force: bool = False) -> Dict:
+    now = datetime.utcnow()
+    with external_state_lock:
+        cached_state = external_state_cache.get("state")
+        cached_ts = external_state_cache.get("ts")
+        if (
+            not force
+            and cached_state is not None
+            and isinstance(cached_ts, datetime)
+            and (now - cached_ts).total_seconds() < SAVIAN_STATE_CACHE_SECONDS
+        ):
+            return deepcopy(cached_state)
+    try:
+        state = _build_external_state()
+    except PermissionError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        with external_state_lock:
+            cached_state = external_state_cache.get("state")
+            if cached_state is not None:
+                fallback = deepcopy(cached_state)
+                fallback["warning"] = str(exc)
+                return fallback
+        raise
+    with external_state_lock:
+        external_state_cache["state"] = deepcopy(state)
+        external_state_cache["ts"] = now
+    return state
+
+
+PUBLIC_PATHS = {
+    "/login",
+    "/trabajador",
+    "/scan",
+    "/api/login",
+    "/api/logout",
+    "/api/auth/status",
+}
+
+
+@app.before_request
+def _guard_routes():
+    path = request.path or "/"
+    if request.method == "OPTIONS":
+        return None
+    if path.startswith("/static/"):
+        return None
+    if path in PUBLIC_PATHS:
+        return None
+    if path == "/favicon.ico":
+        return None
+    if _is_request_authenticated():
+        return None
+    if path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "Sesion no iniciada"}), 401
+    return redirect(url_for("view_login"))
+
+
+@app.route("/login")
+def view_login():
+    if _is_request_authenticated():
+        return redirect(url_for("index"))
+    return render_template("login.html")
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -1047,23 +1869,57 @@ def view_center(center_id):
 
 @app.route("/api/state")
 def api_state():
-    return jsonify(_serialize_state())
+    try:
+        return jsonify(_get_external_state_cached())
+    except PermissionError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 401
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 502
 
 
 @app.route("/api/login", methods=["POST"])
 def api_login():
-    payload = request.get_json(force=True)
-    username = payload.get("username")
-    password = payload.get("password")
-    role = payload.get("role", "worker")
-    if role == "admin":
-        if username == ADMIN["username"] and password == ADMIN["password"]:
-            return jsonify({"ok": True, "user": username, "role": "admin"})
-        return jsonify({"ok": False, "error": "Credenciales de admin incorrectas"}), 401
-    user = WORKERS.get(username)
-    if user and user["password"] == password:
-        return jsonify({"ok": True, "user": username, "role": "worker"})
-    return jsonify({"ok": False, "error": "Usuario o clave incorrectos"}), 401
+    payload = request.get_json(force=True) or {}
+    username = str(payload.get("username", "")).strip()
+    password = str(payload.get("password", "")).strip()
+    role = payload.get("role", "admin")
+    if not username or not password:
+        return jsonify({"ok": False, "error": "Debes indicar usuario y contrasena"}), 400
+    ok, tokens, message = _login_remote(username, password)
+    if not ok:
+        return jsonify({"ok": False, "error": message}), 401
+    _set_auth_session(username, tokens)
+    return jsonify(
+        {
+            "ok": True,
+            "user": username,
+            "role": role,
+            "tipo_usuario": tokens.get("tipo_usuario"),
+            "message": message,
+        }
+    )
+
+
+@app.route("/api/logout", methods=["POST"])
+def api_logout():
+    _clear_auth_session()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    auth_data = _ensure_auth_session(refresh_if_needed=True)
+    if not auth_data:
+        return jsonify({"ok": True, "authenticated": False})
+    claims = auth_data.get("claims") or {}
+    return jsonify(
+        {
+            "ok": True,
+            "authenticated": True,
+            "user": auth_data.get("username") or claims.get("email"),
+            "tipo_usuario": auth_data.get("tipo_usuario") or claims.get("tipo_usuario"),
+        }
+    )
 
 
 @app.route("/api/simulate-drain", methods=["POST"])
@@ -1075,6 +1931,7 @@ def api_simulate_drain():
 
 @app.route("/api/admin/auto-plan", methods=["POST"])
 def api_admin_auto_plan():
+    _ensure_external_runtime_ready()
     planned = _auto_plan_urgent_routes()
     if not planned:
         return jsonify({"ok": False, "error": "Sin centros urgentes o camiones libres"}), 400
@@ -1162,6 +2019,7 @@ def api_admin_delete_route():
 
 @app.route("/api/routes/claim", methods=["POST"])
 def api_claim_route():
+    _ensure_external_runtime_ready()
     payload = request.get_json(force=True)
     worker = payload.get("worker")
     truck_id = payload.get("truck_id")
@@ -1213,6 +2071,7 @@ def api_claim_route():
 
 @app.route("/api/routes/plan", methods=["POST"])
 def api_plan_route():
+    _ensure_external_runtime_ready()
     payload = request.get_json(force=True)
     worker = payload.get("worker")
     truck_id = payload.get("truck_id")
@@ -1316,6 +2175,17 @@ def api_arrive_stop():
     route = next((r for r in active_routes if r["id"] == route_id), None)
     if not route:
         return jsonify({"ok": False, "error": "Ruta no encontrada"}), 400
+
+    if route.get("status") == "planificada":
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Debes escanear primero el QR del camion para activar la ruta",
+            }
+        ), 400
+    if route.get("status") in {"regresando", "finalizada"}:
+        return jsonify({"ok": False, "error": "La ruta ya no admite llegadas a centro"}), 400
+
     idx = route.get("current_stop_idx", 0)
     if idx >= len(route["stops"]):
         return jsonify({"ok": False, "error": "No hay destinos pendientes"}), 400

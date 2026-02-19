@@ -45,10 +45,19 @@
           <div>
             <div class="caps">Mapa</div>
             <h2>Flota y centros</h2>
-            <p class="muted small">Vista completa con camiones y destinos.</p>
+            <p class="muted small">Pulsa un centro para desplegar sus depositos ordenados por gravedad.</p>
           </div>
         </div>
         <div id="map-full" class="map"></div>
+        <div class="map-center-panel">
+          <div class="panel-head tight">
+            <div>
+              <div class="caps">Centro seleccionado</div>
+              <h3 id="map-center-title">Depositos del centro</h3>
+            </div>
+          </div>
+          <div id="map-center-deposits" class="map-depot-list"></div>
+        </div>
       </section>
 
       <section class="panel">
