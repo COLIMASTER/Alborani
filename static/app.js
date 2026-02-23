@@ -62,6 +62,8 @@ function toggleGate(show) {
 
 const statusColor = {
 
+  empty: "#ff1f36",
+
   ok: "#66e2c1",
 
   warn: "#ffc857",
@@ -76,6 +78,8 @@ const statusColor = {
 
 const severityRank = {
 
+  empty: 5,
+
   critical: 4,
 
   alert: 3,
@@ -87,6 +91,40 @@ const severityRank = {
   unknown: 0,
 
 };
+
+function asFiniteNumber(value, fallback = null) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function tankVisualStatus(tankOrStatus, maybePercentage = null, maybeLiters = null, maybeCapacity = null) {
+  let status = "unknown";
+  let percentage = null;
+  let liters = null;
+  let capacity = null;
+
+  if (tankOrStatus && typeof tankOrStatus === "object") {
+    status = String(tankOrStatus.status || "unknown");
+    percentage = asFiniteNumber(tankOrStatus.percentage, null);
+    liters = asFiniteNumber(
+      tankOrStatus.current_l !== undefined ? tankOrStatus.current_l : tankOrStatus.liters,
+      null
+    );
+    capacity = asFiniteNumber(
+      tankOrStatus.capacity_l !== undefined ? tankOrStatus.capacity_l : tankOrStatus.capacity,
+      null
+    );
+  } else {
+    status = String(tankOrStatus || "unknown");
+    percentage = asFiniteNumber(maybePercentage, null);
+    liters = asFiniteNumber(maybeLiters, null);
+    capacity = asFiniteNumber(maybeCapacity, null);
+  }
+
+  if (capacity !== null && capacity > 0 && liters !== null && liters <= 0) return "empty";
+  if (percentage !== null && percentage <= 0 && status !== "unknown") return "empty";
+  return status;
+}
 
 
 
@@ -359,9 +397,10 @@ function worstStatus(tanks = []) {
 
     const current = severityRank[worst] ?? -1;
 
-    const incoming = severityRank[t.status] ?? 0;
+    const visualStatus = tankVisualStatus(t);
+    const incoming = severityRank[visualStatus] ?? 0;
 
-    return incoming > current ? t.status : worst;
+    return incoming > current ? visualStatus : worst;
 
   }, "ok");
 
@@ -373,9 +412,9 @@ function centerSeverity(center) {
 
   const tanks = center.tanks || [];
   const worst = severityRank[worstStatus(tanks)] ?? 0;
-  const alertCount = tanks.filter((t) => t.status === "critical" || t.status === "alert").length;
-  const warnCount = tanks.filter((t) => t.status === "warn").length;
-  const minPct = Math.min(...tanks.map((t) => t.percentage || 100));
+  const alertCount = tanks.filter((t) => ["empty", "critical", "alert"].includes(tankVisualStatus(t))).length;
+  const warnCount = tanks.filter((t) => tankVisualStatus(t) === "warn").length;
+  const minPct = Math.min(...tanks.map((t) => asFiniteNumber(t.percentage, 100)));
   return { worst, alertCount, warnCount, minPct: Number.isFinite(minPct) ? minPct : 100 };
 
 }
@@ -708,9 +747,9 @@ function refreshSessionBadges() {
 }
 
 function tankSeverityScore(tank) {
-  const status = tank?.status || "unknown";
+  const status = tankVisualStatus(tank);
   const rank = severityRank[status] ?? severityRank.unknown;
-  const pct = Number.isFinite(Number(tank?.percentage)) ? Number(tank.percentage) : 100;
+  const pct = asFiniteNumber(tank?.percentage, 100);
   return rank * 1000 + (100 - pct);
 }
 
@@ -718,14 +757,18 @@ function sortTanksBySeverity(tanks = []) {
   return [...(tanks || [])].sort((a, b) => tankSeverityScore(b) - tankSeverityScore(a));
 }
 
-function tankStatusLabel(status) {
+function tankStatusLabel(tankOrStatus, maybePercentage = null, maybeLiters = null, maybeCapacity = null) {
+  const status = tankVisualStatus(tankOrStatus, maybePercentage, maybeLiters, maybeCapacity);
+  if (status === "empty") return "0% Critico";
   if (status === "critical") return "Alerta roja";
   if (status === "alert") return "Alerta";
   if (status === "warn") return "Precaucion";
   return "Normal";
 }
 
-function tankToneClass(status) {
+function tankToneClass(tankOrStatus, maybePercentage = null, maybeLiters = null, maybeCapacity = null) {
+  const status = tankVisualStatus(tankOrStatus, maybePercentage, maybeLiters, maybeCapacity);
+  if (status === "empty") return "priority-empty vibrate-red-strong";
   if (status === "critical") return "priority-critical vibrate-red";
   if (status === "alert" || status === "warn") return "priority-warn vibrate-warn";
   return "priority-ok";
@@ -979,7 +1022,7 @@ function tankSvgSimple(tank) {
 
   const y = 90 - fillH;
 
-  const color = statusColor[tank.status] || statusColor.ok;
+  const color = statusColor[tankVisualStatus(tank)] || statusColor.ok;
 
   return `
 
@@ -1035,14 +1078,23 @@ function renderCenters(centers, targetId = "center-grid", options = {}) {
         <div class="micro-head-right">
           <span class="count-pill">${sorted.length} dep.</span>
           <span class="pill tiny ${worst}">${
-            worst === "critical" ? "ALTA" : worst === "alert" ? "ALERTA" : worst === "warn" ? "PRE" : "OK"
+            worst === "empty"
+              ? "0%"
+              : worst === "critical"
+                ? "ALTA"
+                : worst === "alert"
+                  ? "ALERTA"
+                  : worst === "warn"
+                    ? "PRE"
+                    : "OK"
           }</span>
         </div>
       </div>
       <div class="nano-row">
         ${preview
           .map((t, idx) => {
-            const color = statusColor[t.status] || statusColor.ok;
+            const visualStatus = tankVisualStatus(t);
+            const color = statusColor[visualStatus] || statusColor.ok;
             const pct = Math.max(0, Math.min(t.percentage || 0, 100));
             const fillPct = Math.max(6, pct);
             return `
@@ -1084,7 +1136,15 @@ function renderCenterDetail(center, opts = {}) {
   const worst = worstStatus(center.tanks || []);
   if (badge) {
     const label =
-      worst === "critical" ? "Alerta" : worst === "alert" ? "Alerta 20%" : worst === "warn" ? "Precaucion" : "Ok";
+      worst === "empty"
+        ? "Critico 0%"
+        : worst === "critical"
+          ? "Alerta"
+          : worst === "alert"
+            ? "Alerta 20%"
+            : worst === "warn"
+              ? "Precaucion"
+              : "Ok";
     badge.textContent = label;
     badge.className = `chip soft severity-${worst}`;
   }
@@ -1094,11 +1154,12 @@ function renderCenterDetail(center, opts = {}) {
   sorted.forEach((t, idx) => {
     const pct = Math.max(0, Math.min(t.percentage || 0, 100));
     const fillPct = Math.max(6, pct);
-    const color = statusColor[t.status] || statusColor.ok;
-    const statusText = tankStatusLabel(t.status);
+    const visualStatus = tankVisualStatus(t);
+    const color = statusColor[visualStatus] || statusColor.ok;
+    const statusText = tankStatusLabel(t);
     const desc = t.description || t.product || "-";
     const lastReading = formatEtaDateTime(t.last_reading || t.runout_eta);
-    const toneClass = tankToneClass(t.status);
+    const toneClass = tankToneClass(t);
     const card = document.createElement("div");
     card.className = `focus-tank compact ${toneClass}`;
     card.innerHTML = `
@@ -1110,7 +1171,7 @@ function renderCenterDetail(center, opts = {}) {
         <div class="focus-meta">
           <div class="focus-head">
             <strong>${t.label || "-"}</strong>
-            <span class="pill tiny ${t.status || "ok"}">${statusText}</span>
+            <span class="pill tiny ${visualStatus || "ok"}">${statusText}</span>
           </div>
           <div class="focus-line">${formatLiters(t.current_l)} / ${formatLiters(t.capacity_l)}</div>
           <div class="focus-line muted">${pct}% - ${shortText(desc, 28)}</div>
@@ -1325,7 +1386,7 @@ function renderSensorDetail(centers) {
 
     card.innerHTML = `
 
-      <div class="row"><strong>${t.label}</strong><span class="status ${t.status}">${t.percentage}%</span></div>
+      <div class="row"><strong>${t.label}</strong><span class="status ${tankVisualStatus(t)}">${t.percentage}%</span></div>
 
       <div class="sensor-row"><span>pH ${t.sensors.ph}</span><span>CE ${t.sensors.ec} mS/cm</span></div>
 
@@ -1351,33 +1412,37 @@ function buildAlertRows(alerts = [], state = null) {
   const rows = [];
   if (state?.centers?.length) {
     (state.centers || []).forEach((center) => {
-      sortTanksBySeverity(center.tanks || [])
-        .filter((t) => ["warn", "alert", "critical"].includes(t.status))
-        .forEach((tank) => {
-          rows.push({
-            center: center.name,
-            center_id: center.id,
-            tank_id: tank.id,
-            tank_label: tank.label || tank.id,
-            status: tank.status || "warn",
-            percentage: Number(tank.percentage || 0),
-            liters: tank.current_l,
-            capacity: tank.capacity_l,
-            last_reading: tank.last_reading,
-            message: tank.description || tank.product || "",
-          });
+      sortTanksBySeverity(center.tanks || []).forEach((tank) => {
+        const status = tankVisualStatus(tank);
+        if (!["warn", "alert", "critical", "empty"].includes(status)) return;
+        rows.push({
+          center: center.name,
+          center_id: center.id,
+          tank_id: tank.id,
+          tank_label: tank.label || tank.id,
+          status,
+          percentage: asFiniteNumber(tank.percentage, null),
+          liters: tank.current_l,
+          capacity: tank.capacity_l,
+          last_reading: tank.last_reading,
+          message: tank.description || tank.product || "",
         });
+      });
     });
   } else {
     (alerts || []).forEach((a) => {
       const pctMatch = String(a.message || "").match(/([0-9]+\\.?[0-9]*)%/);
-      const pct = pctMatch ? Number(pctMatch[1]) : 0;
+      const pct = pctMatch ? Number(pctMatch[1]) : null;
+      const status = tankVisualStatus(
+        a.status || (a.severity === "alta" ? "critical" : "warn"),
+        pct
+      );
       rows.push({
         center: a.center || "-",
         center_id: a.center_id || a.center || "-",
         tank_id: a.tank_id || "-",
         tank_label: a.tank_id || "-",
-        status: a.status || (a.severity === "alta" ? "critical" : "warn"),
+        status,
         percentage: pct,
         liters: null,
         capacity: null,
@@ -1407,8 +1472,8 @@ function renderAlarms(alerts, targetId = "alarms-panel", state = null) {
   }
 
   rows.forEach((row) => {
-    const tone = tankToneClass(row.status);
-    const statusText = tankStatusLabel(row.status);
+    const tone = tankToneClass(row);
+    const statusText = tankStatusLabel(row);
     const card = document.createElement("div");
     card.className = `alert-card rich ${tone}`;
     card.innerHTML = `
@@ -1418,7 +1483,7 @@ function renderAlarms(alerts, targetId = "alarms-panel", state = null) {
       </div>
       <div class="alert-main">
         <strong>${row.tank_label}</strong>
-        <span>${Math.round(row.percentage || 0)}%</span>
+        <span>${Number.isFinite(row.percentage) ? `${Math.round(row.percentage)}%` : "-"}</span>
       </div>
       <div class="alert-mini">
         <span>${formatLiters(row.liters)} / ${formatLiters(row.capacity)}</span>
@@ -1440,14 +1505,14 @@ function renderCenterAlerts(center, alerts, state = null) {
   panel.innerHTML = "";
   rows.forEach((row) => {
     const card = document.createElement("div");
-    card.className = `alert-card rich ${tankToneClass(row.status)}`;
+    card.className = `alert-card rich ${tankToneClass(row)}`;
     card.innerHTML = `
       <div class="alert-top">
         <span>${row.tank_label}</span>
-        <span class="pill tiny ${row.status}">${tankStatusLabel(row.status)}</span>
+        <span class="pill tiny ${row.status}">${tankStatusLabel(row)}</span>
       </div>
       <div class="alert-mini">
-        <span>${Math.round(row.percentage || 0)}%</span>
+        <span>${Number.isFinite(row.percentage) ? `${Math.round(row.percentage)}%` : "-"}</span>
         <span>${formatLiters(row.liters)} / ${formatLiters(row.capacity)}</span>
       </div>
     `;
@@ -1529,7 +1594,12 @@ function renderActiveRoutes(routes, centers) {
 
     const centerStatus = worstStatus(center?.tanks || []);
 
-    const statusClass = centerStatus === "critical" ? "critical" : centerStatus === "warn" ? "warn" : "ok";
+    const statusClass =
+      centerStatus === "empty" || centerStatus === "critical"
+        ? "critical"
+        : centerStatus === "alert" || centerStatus === "warn"
+          ? "warn"
+          : "ok";
 
     card.innerHTML = `
 
@@ -2376,15 +2446,16 @@ function renderMapCenterDeposits(center, targetId = "map-center-deposits", title
   }
   box.innerHTML = rows
     .map((tank) => {
-      const toneClass = tankToneClass(tank.status);
+      const visualStatus = tankVisualStatus(tank);
+      const toneClass = tankToneClass(tank);
       return `
         <div class="map-depot-row ${toneClass}">
           <div class="map-depot-main">
             <strong>${tank.label || tank.id}</strong>
-            <span class="pill tiny ${tank.status || "ok"}">${tankStatusLabel(tank.status)}</span>
+            <span class="pill tiny ${visualStatus || "ok"}">${tankStatusLabel(tank)}</span>
           </div>
           <div class="map-depot-meta">
-            <span>${Math.round(tank.percentage || 0)}%</span>
+            <span>${Number.isFinite(tank.percentage) ? `${Math.round(tank.percentage)}%` : "-"}</span>
             <span>${formatLiters(tank.current_l)} / ${formatLiters(tank.capacity_l)}</span>
             <span>${formatEtaDateTime(tank.last_reading)}</span>
           </div>
@@ -2442,7 +2513,9 @@ function renderMap(state, targetId = "map") {
       centerMarkers[key].setIcon(icon);
     }
 
-    const alertCount = (center.tanks || []).filter((t) => ["warn", "alert", "critical"].includes(t.status)).length;
+    const alertCount = (center.tanks || []).filter((t) =>
+      ["warn", "alert", "critical", "empty"].includes(tankVisualStatus(t))
+    ).length;
     const tooltipHtml = `
       <div class="map-popup">
         <strong>${center.name}</strong>

@@ -196,6 +196,12 @@ img {
   font-size: 10px;
 }
 
+.pill.empty {
+  background: #ffd7dc;
+  border-color: #ff7c89;
+  color: #9f091b;
+}
+
 .btn {
   border: none;
   padding: 11px 16px;
@@ -521,6 +527,10 @@ img {
 .severity-warn {
   border-color: rgba(246, 195, 79, 0.6);
 }
+.severity-empty {
+  border-color: rgba(255, 31, 54, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 31, 54, 0.25), 0 18px 28px rgba(170, 0, 28, 0.2);
+}
 .severity-critical {
   border-color: rgba(255, 107, 107, 0.7);
 }
@@ -530,6 +540,9 @@ img {
 }
 .chip.severity-warn {
   color: #ffd88f;
+}
+.chip.severity-empty {
+  color: #ff9aa8;
 }
 .chip.severity-critical {
   color: #ffc5c5;
@@ -628,6 +641,12 @@ img {
   box-shadow: 0 0 0 1px rgba(255, 107, 107, 0.2), 0 16px 24px rgba(180, 35, 24, 0.18);
 }
 
+.priority-empty {
+  border-color: rgba(255, 31, 54, 1) !important;
+  box-shadow: 0 0 0 1px rgba(255, 31, 54, 0.34), 0 20px 32px rgba(176, 0, 27, 0.28);
+  background: linear-gradient(180deg, #fff4f5 0%, #ffffff 100%);
+}
+
 .priority-warn {
   border-color: rgba(246, 195, 79, 0.9) !important;
   box-shadow: 0 0 0 1px rgba(246, 195, 79, 0.2), 0 14px 20px rgba(146, 64, 14, 0.14);
@@ -655,8 +674,33 @@ img {
   }
 }
 
+@keyframes vibrationXStrong {
+  0% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-1.8px);
+  }
+  40% {
+    transform: translateX(1.8px);
+  }
+  60% {
+    transform: translateX(-1.6px);
+  }
+  80% {
+    transform: translateX(1.6px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
 .vibrate-red {
   animation: vibrationX 0.26s linear infinite;
+}
+
+.vibrate-red-strong {
+  animation: vibrationXStrong 0.19s linear infinite;
 }
 
 .vibrate-warn {
@@ -777,6 +821,11 @@ img {
   color: #8c5b00;
   border-color: #f6d48c;
 }
+.status-pill.empty {
+  background: #ffd7dc;
+  color: #9f091b;
+  border-color: #ff7c89;
+}
 .status-pill.critical {
   background: #ffe8e8;
   color: #8a1c1c;
@@ -795,12 +844,19 @@ img {
 .status-dot.warn {
   background: #f6c34f;
 }
+.status-dot.empty {
+  background: #ff1f36;
+}
 .status-dot.critical {
   background: #ff6b6b;
 }
 
 .mini-tank.status-warn {
   border-color: rgba(246, 195, 79, 0.6);
+}
+
+.mini-tank.status-empty {
+  border-color: rgba(255, 31, 54, 0.9);
 }
 
 .mini-tank.status-critical {
@@ -1023,6 +1079,9 @@ img {
 }
 .status.warn {
   color: #f6c34f;
+}
+.status.empty {
+  color: #ff1f36;
 }
 .status.critical {
   color: #ff6b6b;
